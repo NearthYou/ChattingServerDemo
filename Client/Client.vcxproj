@@ -19,10 +19,10 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Application.h" />
-    <ClInclude Include="Common\PacketDefine.h" />
-    <ClInclude Include="D3D11Manager.h" />
-    <ClInclude Include="ImGuiManager.h" />
+    <ClInclude Include="Core\ImGuiManager.h" />
+    <ClInclude Include="UI\Application.h" />
+    <ClInclude Include="UI\D3D11Manager.h" />
+    <ClInclude Include="Network\NetworkManager.h" />
     <ClInclude Include="ImGui\imconfig.h" />
     <ClInclude Include="ImGui\imgui.h" />
     <ClInclude Include="ImGui\imgui_impl_dx11.h" />
@@ -31,12 +31,13 @@
     <ClInclude Include="ImGui\imstb_rectpack.h" />
     <ClInclude Include="ImGui\imstb_textedit.h" />
     <ClInclude Include="ImGui\imstb_truetype.h" />
-    <ClInclude Include="NetworkManager.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Application.cpp" />
-    <ClCompile Include="D3D11Manager.cpp" />
-    <ClCompile Include="ImGuiManager.cpp" />
+    <ClCompile Include="UI\Application.cpp" />
+    <ClCompile Include="UI\D3D11Manager.cpp" />
+    <ClCompile Include="Core\ImGuiManager.cpp" />
+    <ClCompile Include="Core\main.cpp" />
+    <ClCompile Include="Network\NetworkManager.cpp" />
     <ClCompile Include="ImGui\imgui.cpp" />
     <ClCompile Include="ImGui\imgui_demo.cpp" />
     <ClCompile Include="ImGui\imgui_draw.cpp" />
@@ -44,8 +45,7 @@
     <ClCompile Include="ImGui\imgui_impl_win32.cpp" />
     <ClCompile Include="ImGui\imgui_tables.cpp" />
     <ClCompile Include="ImGui\imgui_widgets.cpp" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="NetworkManager.cpp" />
+    <ClCompile Include="..\Common\Utils\Logger.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
