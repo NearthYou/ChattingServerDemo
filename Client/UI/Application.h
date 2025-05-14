@@ -25,6 +25,11 @@ private:
     bool Running = true;
     bool LoggedIn = false;
     bool showLoginFailedPopup = false;
+    bool showRegisterPopup = false;
+    char RegisterNickname[32] = {};
+    char RegisterPassword[32] = {};
+    bool showRegisterResultPopup = false;
+    std::string registerResultMessage;
 
     char Nickname[32] = {};
     char InputBuffer[256] = {};  // 한글 대응: char[]로 유지
