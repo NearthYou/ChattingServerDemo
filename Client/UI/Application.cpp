@@ -89,38 +89,7 @@ void Application::DrawLoginUI()
             Network.SendLoginRequest(Nickname, "");
         }
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Register"))
-    {
-        showRegisterPopup = true;
-        RegisterNickname[0] = 0;
-        RegisterPassword[0] = 0;
-    }
 
-    // 회원가입 팝업
-    if (showRegisterPopup)
-    {
-        ImGui::OpenPopup("Register");
-        showRegisterPopup = false;
-    }
-    if (ImGui::BeginPopupModal("Register", NULL, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        ImGui::InputText("Nickname", RegisterNickname, IM_ARRAYSIZE(RegisterNickname));
-        ImGui::InputText("Password", RegisterPassword, IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
-        if (ImGui::Button("Register"))
-        {
-            Network.SendRegisterRequest(RegisterNickname, RegisterPassword);
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel"))
-        {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    // 로그인 실패 팝업
     if (showLoginFailedPopup)
         ImGui::OpenPopup("Login Failed");
 
@@ -130,22 +99,6 @@ void Application::DrawLoginUI()
         if (ImGui::Button("OK")) {
             ImGui::CloseCurrentPopup();
             showLoginFailedPopup = false;
-        }
-        ImGui::EndPopup();
-    }
-
-    // 회원가입 결과 팝업
-    if (showRegisterResultPopup)
-    {
-        ImGui::OpenPopup("Register Result");
-        showRegisterResultPopup = false;
-    }
-    if (ImGui::BeginPopupModal("Register Result", NULL, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        ImGui::Text("%s", registerResultMessage.c_str());
-        if (ImGui::Button("OK"))
-        {
-            ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
