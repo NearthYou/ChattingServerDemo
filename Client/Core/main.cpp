@@ -7,7 +7,6 @@
 int main()
 {
     Logger::GetInstance().SetLogFile("client.log");
-    Logger::GetInstance().Log("클라이언트 시작");
 
     std::string serverIP = "127.0.0.1";
     int serverPort = 8888;
@@ -24,13 +23,13 @@ int main()
 
     Application app;
     if (!app.Init(GetModuleHandle(NULL), serverIP, serverPort)) {
-        Logger::GetInstance().LogError("서버에 연결할 수 없습니다.");
+        Logger::GetInstance().LogError("Failed to connect to the server.");
         return 1;
     }
 
     app.Run();
     app.Shutdown();
 
-    Logger::GetInstance().Log("클라이언트 종료");
+    Logger::GetInstance().Log("Client shutdown");
     return 0;
 }
