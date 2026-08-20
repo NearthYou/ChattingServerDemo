@@ -1,45 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source Files">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    <Filter Include="Application">
+      <UniqueIdentifier>{E278771E-A1FD-4E6A-A363-C5DE199E5D05}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="Core">
+      <UniqueIdentifier>{D50880B1-ED32-4A7B-92A8-34CBE7B0612A}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="Database">
+      <UniqueIdentifier>{6B69A257-EF0F-4CD3-BA3A-A5603DC0C46C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Network">
+      <UniqueIdentifier>{22755F2F-6C87-4B18-A970-9E33D7C2F45C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Common">
+      <UniqueIdentifier>{98CA7945-18F7-402C-BE9C-A10F458D681A}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Client\main.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="Core\main.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Server\DBManager.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="Core\Server.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Server\main.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="Database\DatabaseManager.cpp">
+      <Filter>Database</Filter>
     </ClCompile>
-    <ClCompile Include="Server\Server.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="Network\Session.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Common\Protocol\ChatProtocol.cpp">
+      <Filter>Common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Common\Utils\StringUtils.cpp">
+      <Filter>Common</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Client\main.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Application\IChatService.h">
+      <Filter>Application</Filter>
     </ClInclude>
-    <ClInclude Include="Common\PacketDefine.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Core\Server.h">
+      <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Server\DBManager.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Database\DatabaseManager.h">
+      <Filter>Database</Filter>
     </ClInclude>
-    <ClInclude Include="Server\Server.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Network\Session.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Common\Protocol\ChatProtocol.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Common\PacketDefine.h">
+      <Filter>Common</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

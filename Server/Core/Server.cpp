@@ -1,176 +1,916 @@
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include "Server.h"
-#include "../Database/DatabaseManager.h"
-#include "../../Common/PacketDefine.h"
-#include <iostream>
-#include <sstream>
 
-#pragma comment(lib, "ws2_32.lib")
+#include "../Application/IChatService.h"
+#include "../Network/Session.h"
 
-Server::Server() : serverSocket(INVALID_SOCKET), isRunning(false)
+#include <WinSock2.h>
+#include <MSWSock.h>
+#include <WS2tcpip.h>
+#include <Windows.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace
+{
+    constexpr std::size_t kReceiveBufferBytes = 16 * 1024;
+    constexpr DWORD kAcceptAddressBytes = sizeof(sockaddr_in) + 16;
+
+    enum class IoOperationType
+    {
+        Accept,
+        Receive,
+        Send
+    };
+
+    struct IoOperation
+    {
+        OVERLAPPED overlapped{};
+        IoOperationType type;
+        std::vector<std::uint8_t> buffer;
+        WSABUF socketBuffer{};
+        std::shared_ptr<Session> session;
+        std::size_t offset = 0;
+
+        IoOperation(
+            IoOperationType operationType,
+            std::shared_ptr<Session> operationSession,
+            std::size_t bufferBytes)
+            : type(operationType),
+              buffer(bufferBytes),
+              session(std::move(operationSession))
+        {
+        }
+    };
+}
+
+class Server::Impl
+{
+public:
+    Impl(IChatService& chatService, ServerOptions serverOptions)
+        : service(chatService),
+          options(serverOptions)
+    {
+        options.acceptPrepostCount = std::max<std::size_t>(1, options.acceptPrepostCount);
+        options.maxQueuedSendBytes = std::max<std::size_t>(
+            chat::protocol::kFrameHeaderBytes + 8,
+            options.maxQueuedSendBytes);
+    }
+
+    ~Impl()
+    {
+        Stop();
+    }
+
+    bool Initialize(std::uint16_t requestedPort)
+    {
+        if (started.load())
+        {
+            return false;
+        }
+
+        WSADATA wsaData{};
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        {
+            return false;
+        }
+        wsaStarted = true;
+        started.store(true);
+        stopping.store(false);
+
+        completionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        operationsDrainedEvent = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+        stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (completionPort == nullptr || operationsDrainedEvent == nullptr || stopEvent == nullptr)
+        {
+            Stop();
+            return false;
+        }
+
+        const SOCKET listenSocket = WSASocketW(
+            AF_INET,
+            SOCK_STREAM,
+            IPPROTO_TCP,
+            nullptr,
+            0,
+            WSA_FLAG_OVERLAPPED);
+        if (listenSocket == INVALID_SOCKET)
+        {
+            Stop();
+            return false;
+        }
+        listener.store(listenSocket);
+
+        const BOOL exclusiveAddress = TRUE;
+        if (setsockopt(
+                listenSocket,
+                SOL_SOCKET,
+                SO_EXCLUSIVEADDRUSE,
+                reinterpret_cast<const char*>(&exclusiveAddress),
+                sizeof(exclusiveAddress)) == SOCKET_ERROR)
+        {
+            Stop();
+            return false;
+        }
+
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(requestedPort);
+        if (bind(
+                listenSocket,
+                reinterpret_cast<const sockaddr*>(&address),
+                sizeof(address)) == SOCKET_ERROR ||
+            listen(listenSocket, SOMAXCONN) == SOCKET_ERROR)
+        {
+            Stop();
+            return false;
+        }
+
+        int addressBytes = sizeof(address);
+        if (getsockname(
+                listenSocket,
+                reinterpret_cast<sockaddr*>(&address),
+                &addressBytes) == SOCKET_ERROR)
+        {
+            Stop();
+            return false;
+        }
+        boundPort.store(ntohs(address.sin_port));
+
+        if (CreateIoCompletionPort(
+                reinterpret_cast<HANDLE>(listenSocket),
+                completionPort,
+                0,
+                0) == nullptr)
+        {
+            Stop();
+            return false;
+        }
+
+        GUID acceptExGuid = WSAID_ACCEPTEX;
+        DWORD bytesReturned = 0;
+        if (WSAIoctl(
+                listenSocket,
+                SIO_GET_EXTENSION_FUNCTION_POINTER,
+                &acceptExGuid,
+                sizeof(acceptExGuid),
+                &acceptEx,
+                sizeof(acceptEx),
+                &bytesReturned,
+                nullptr,
+                nullptr) == SOCKET_ERROR)
+        {
+            Stop();
+            return false;
+        }
+
+        const unsigned int hardwareThreads = std::thread::hardware_concurrency();
+        const std::size_t requestedWorkers = options.workerCount == 0
+            ? std::max<std::size_t>(1, hardwareThreads)
+            : options.workerCount;
+        configuredWorkerCount = std::min<std::size_t>(8, requestedWorkers);
+
+        try
+        {
+            workers.reserve(configuredWorkerCount);
+            for (std::size_t index = 0; index < configuredWorkerCount; ++index)
+            {
+                workers.emplace_back([this] { WorkerLoop(); });
+            }
+        }
+        catch (...)
+        {
+            Stop();
+            return false;
+        }
+
+        for (std::size_t index = 0; index < options.acceptPrepostCount; ++index)
+        {
+            if (!PostAccept())
+            {
+                Stop();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void Wait()
+    {
+        const HANDLE eventHandle = stopEvent;
+        if (started.load() && eventHandle != nullptr)
+        {
+            WaitForSingleObject(eventHandle, INFINITE);
+        }
+    }
+
+    void RequestStop()
+    {
+        std::lock_guard<std::mutex> lock(stopEventMutex);
+        if (stopEvent != nullptr)
+        {
+            SetEvent(stopEvent);
+        }
+    }
+
+    void Stop()
+    {
+        if (!started.exchange(false))
+        {
+            return;
+        }
+
+        stopping.store(true);
+        {
+            std::lock_guard<std::mutex> lock(operationRegistrationMutex);
+        }
+        RequestStop();
+
+        const SOCKET listenSocket = listener.exchange(INVALID_SOCKET);
+        if (listenSocket != INVALID_SOCKET)
+        {
+            closesocket(listenSocket);
+        }
+
+        const auto sessionSnapshot = SnapshotSessions(false);
+        for (const auto& session : sessionSnapshot)
+        {
+            CloseSession(session);
+        }
+
+        if (operationsDrainedEvent != nullptr)
+        {
+            WaitForSingleObject(operationsDrainedEvent, INFINITE);
+        }
+
+        if (completionPort != nullptr)
+        {
+            for (std::size_t index = 0; index < workers.size(); ++index)
+            {
+                PostQueuedCompletionStatus(completionPort, 0, 0, nullptr);
+            }
+        }
+        for (auto& worker : workers)
+        {
+            if (worker.joinable())
+            {
+                worker.join();
+            }
+        }
+        workers.clear();
+
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex);
+            sessions.clear();
+        }
+
+        if (completionPort != nullptr)
+        {
+            CloseHandle(completionPort);
+            completionPort = nullptr;
+        }
+        if (operationsDrainedEvent != nullptr)
+        {
+            CloseHandle(operationsDrainedEvent);
+            operationsDrainedEvent = nullptr;
+        }
+        {
+            std::lock_guard<std::mutex> lock(stopEventMutex);
+            if (stopEvent != nullptr)
+            {
+                CloseHandle(stopEvent);
+                stopEvent = nullptr;
+            }
+        }
+        if (wsaStarted)
+        {
+            WSACleanup();
+            wsaStarted = false;
+        }
+
+    }
+
+    std::uint16_t Port() const
+    {
+        return boundPort.load();
+    }
+
+    ServerDiagnostics Diagnostics() const
+    {
+        ServerDiagnostics diagnostics;
+        diagnostics.workerCount = configuredWorkerCount;
+        diagnostics.pendingAccepts = pendingAccepts.load();
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex);
+            diagnostics.activeSessions = sessions.size();
+        }
+        diagnostics.operationsCreated = operationsCreated.load();
+        diagnostics.operationsRetired = operationsRetired.load();
+        diagnostics.outstandingOperations = outstandingOperations.load();
+        diagnostics.sendQueueOverflows = sendQueueOverflows.load();
+        return diagnostics;
+    }
+
+private:
+    IoOperation* CreateOperation(
+        IoOperationType type,
+        const std::shared_ptr<Session>& session,
+        std::size_t bufferBytes)
+    {
+        std::lock_guard<std::mutex> lock(operationRegistrationMutex);
+        if (stopping.load())
+        {
+            return nullptr;
+        }
+
+        IoOperation* operation = nullptr;
+        try
+        {
+            operation = new IoOperation(type, session, bufferBytes);
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+
+        operationsCreated.fetch_add(1);
+        if (outstandingOperations.fetch_add(1) == 0 && operationsDrainedEvent != nullptr)
+        {
+            ResetEvent(operationsDrainedEvent);
+        }
+        return operation;
+    }
+
+    void RetireOperation(IoOperation* operation)
+    {
+        delete operation;
+        operationsRetired.fetch_add(1);
+        if (outstandingOperations.fetch_sub(1) == 1 && operationsDrainedEvent != nullptr)
+        {
+            SetEvent(operationsDrainedEvent);
+        }
+    }
+
+    bool PostAccept()
+    {
+        if (stopping.load() || acceptEx == nullptr)
+        {
+            return false;
+        }
+
+        const SOCKET listenSocket = listener.load();
+        if (listenSocket == INVALID_SOCKET)
+        {
+            return false;
+        }
+
+        const SOCKET acceptedSocket = WSASocketW(
+            AF_INET,
+            SOCK_STREAM,
+            IPPROTO_TCP,
+            nullptr,
+            0,
+            WSA_FLAG_OVERLAPPED);
+        if (acceptedSocket == INVALID_SOCKET)
+        {
+            return false;
+        }
+
+        std::shared_ptr<Session> session;
+        try
+        {
+            session = std::make_shared<Session>(acceptedSocket, options.maxQueuedSendBytes);
+        }
+        catch (...)
+        {
+            closesocket(acceptedSocket);
+            return false;
+        }
+
+        IoOperation* operation = CreateOperation(
+            IoOperationType::Accept,
+            session,
+            2 * kAcceptAddressBytes);
+        if (operation == nullptr)
+        {
+            session->Close();
+            return false;
+        }
+
+        pendingAccepts.fetch_add(1);
+        DWORD receivedBytes = 0;
+        const BOOL accepted = acceptEx(
+            listenSocket,
+            acceptedSocket,
+            operation->buffer.data(),
+            0,
+            kAcceptAddressBytes,
+            kAcceptAddressBytes,
+            &receivedBytes,
+            &operation->overlapped);
+        if (!accepted)
+        {
+            const int error = WSAGetLastError();
+            if (error != WSA_IO_PENDING)
+            {
+                pendingAccepts.fetch_sub(1);
+                session->Close();
+                RetireOperation(operation);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool PostReceive(const std::shared_ptr<Session>& session)
+    {
+        if (stopping.load() || !session->TryBeginReceive())
+        {
+            return false;
+        }
+
+        IoOperation* operation = CreateOperation(
+            IoOperationType::Receive,
+            session,
+            kReceiveBufferBytes);
+        if (operation == nullptr)
+        {
+            session->EndReceive();
+            CloseSession(session);
+            return false;
+        }
+
+        operation->socketBuffer.buf = reinterpret_cast<char*>(operation->buffer.data());
+        operation->socketBuffer.len = static_cast<ULONG>(operation->buffer.size());
+        DWORD flags = 0;
+        DWORD receivedBytes = 0;
+        const int result = WSARecv(
+            session->Socket(),
+            &operation->socketBuffer,
+            1,
+            &receivedBytes,
+            &flags,
+            &operation->overlapped,
+            nullptr);
+        if (result == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING)
+        {
+            session->EndReceive();
+            RetireOperation(operation);
+            CloseSession(session);
+            return false;
+        }
+        return true;
+    }
+
+    bool SubmitSend(IoOperation* operation)
+    {
+        if (stopping.load() || operation->session->IsClosed() ||
+            operation->offset >= operation->buffer.size())
+        {
+            return false;
+        }
+
+        const std::size_t remainingBytes = operation->buffer.size() - operation->offset;
+        if (remainingBytes > (std::numeric_limits<ULONG>::max)())
+        {
+            return false;
+        }
+
+        operation->socketBuffer.buf = reinterpret_cast<char*>(
+            operation->buffer.data() + operation->offset);
+        operation->socketBuffer.len = static_cast<ULONG>(remainingBytes);
+        DWORD sentBytes = 0;
+        const int result = WSASend(
+            operation->session->Socket(),
+            &operation->socketBuffer,
+            1,
+            &sentBytes,
+            0,
+            &operation->overlapped,
+            nullptr);
+        return result == 0 || WSAGetLastError() == WSA_IO_PENDING;
+    }
+
+    bool SendMessage(
+        const std::shared_ptr<Session>& session,
+        const chat::protocol::Message& message)
+    {
+        if (stopping.load() || session->IsClosed())
+        {
+            return false;
+        }
+
+        auto encoded = chat::protocol::EncodeMessage(message);
+        if (encoded.error != chat::protocol::CodecError::None)
+        {
+            CloseSession(session);
+            return false;
+        }
+
+        std::vector<std::uint8_t> firstFrame;
+        const Session::EnqueueResult enqueueResult = session->EnqueueSend(
+            std::move(encoded.bytes),
+            firstFrame);
+        if (enqueueResult == Session::EnqueueResult::Queued)
+        {
+            return true;
+        }
+        if (enqueueResult == Session::EnqueueResult::Overflow)
+        {
+            sendQueueOverflows.fetch_add(1);
+            CloseSession(session);
+            return false;
+        }
+        if (enqueueResult == Session::EnqueueResult::Closed)
+        {
+            return false;
+        }
+
+        IoOperation* operation = CreateOperation(IoOperationType::Send, session, 0);
+        if (operation == nullptr)
+        {
+            CloseSession(session);
+            return false;
+        }
+        operation->buffer = std::move(firstFrame);
+        if (!SubmitSend(operation))
+        {
+            RetireOperation(operation);
+            CloseSession(session);
+            return false;
+        }
+        return true;
+    }
+
+    void WorkerLoop()
+    {
+        for (;;)
+        {
+            DWORD bytesTransferred = 0;
+            ULONG_PTR completionKey = 0;
+            OVERLAPPED* overlapped = nullptr;
+            const BOOL succeeded = GetQueuedCompletionStatus(
+                completionPort,
+                &bytesTransferred,
+                &completionKey,
+                &overlapped,
+                INFINITE);
+            static_cast<void>(completionKey);
+
+            if (overlapped == nullptr)
+            {
+                if (stopping.load())
+                {
+                    return;
+                }
+                continue;
+            }
+
+            auto* operation = reinterpret_cast<IoOperation*>(overlapped);
+            bool requeued = false;
+            switch (operation->type)
+            {
+            case IoOperationType::Accept:
+                HandleAccept(operation, succeeded != FALSE);
+                break;
+            case IoOperationType::Receive:
+                HandleReceive(operation, succeeded != FALSE, bytesTransferred);
+                break;
+            case IoOperationType::Send:
+                requeued = HandleSend(operation, succeeded != FALSE, bytesTransferred);
+                break;
+            }
+
+            if (!requeued)
+            {
+                RetireOperation(operation);
+            }
+        }
+    }
+
+    void HandleAccept(IoOperation* operation, bool succeeded)
+    {
+        pendingAccepts.fetch_sub(1);
+        const auto session = operation->session;
+        bool accepted = succeeded && !stopping.load();
+        const SOCKET listenSocket = listener.load();
+        const SOCKET acceptedSocket = session->Socket();
+
+        if (accepted)
+        {
+            accepted = listenSocket != INVALID_SOCKET && acceptedSocket != INVALID_SOCKET &&
+                setsockopt(
+                    acceptedSocket,
+                    SOL_SOCKET,
+                    SO_UPDATE_ACCEPT_CONTEXT,
+                    reinterpret_cast<const char*>(&listenSocket),
+                    sizeof(listenSocket)) != SOCKET_ERROR;
+        }
+        if (accepted)
+        {
+            accepted = CreateIoCompletionPort(
+                reinterpret_cast<HANDLE>(acceptedSocket),
+                completionPort,
+                0,
+                0) != nullptr;
+        }
+        if (accepted)
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex);
+            if (stopping.load())
+            {
+                accepted = false;
+            }
+            else
+            {
+                sessions[session->Id()] = session;
+            }
+        }
+
+        if (!accepted)
+        {
+            CloseSession(session);
+        }
+        else
+        {
+            PostReceive(session);
+        }
+
+        if (!stopping.load() && !PostAccept() && !stopping.load())
+        {
+            RequestStop();
+        }
+    }
+
+    void HandleReceive(IoOperation* operation, bool succeeded, DWORD bytesTransferred)
+    {
+        const auto session = operation->session;
+        session->EndReceive();
+        if (!succeeded || bytesTransferred == 0 || stopping.load() || session->IsClosed())
+        {
+            CloseSession(session);
+            return;
+        }
+
+        auto decoded = session->Decode(operation->buffer.data(), bytesTransferred);
+        if (decoded.error != chat::protocol::CodecError::None)
+        {
+            CloseSession(session);
+            return;
+        }
+
+        for (const auto& message : decoded.messages)
+        {
+            if (!HandleMessage(session, message))
+            {
+                return;
+            }
+        }
+
+        if (!stopping.load() && !session->IsClosed())
+        {
+            PostReceive(session);
+        }
+    }
+
+    bool HandleSend(IoOperation* operation, bool succeeded, DWORD bytesTransferred)
+    {
+        const auto session = operation->session;
+        if (!succeeded || stopping.load() || session->IsClosed() ||
+            !Session::AdvanceSendOffset(
+                operation->buffer.size(),
+                bytesTransferred,
+                operation->offset))
+        {
+            CloseSession(session);
+            return false;
+        }
+
+        if (operation->offset < operation->buffer.size())
+        {
+            ZeroMemory(&operation->overlapped, sizeof(operation->overlapped));
+            if (SubmitSend(operation))
+            {
+                return true;
+            }
+            CloseSession(session);
+            return false;
+        }
+
+        std::vector<std::uint8_t> nextFrame;
+        if (!session->CompleteSend(nextFrame))
+        {
+            return false;
+        }
+
+        operation->buffer = std::move(nextFrame);
+        operation->offset = 0;
+        ZeroMemory(&operation->overlapped, sizeof(operation->overlapped));
+        if (SubmitSend(operation))
+        {
+            return true;
+        }
+
+        CloseSession(session);
+        return false;
+    }
+
+    bool HandleMessage(
+        const std::shared_ptr<Session>& session,
+        const chat::protocol::Message& message)
+    {
+        using chat::protocol::Message;
+        using chat::protocol::MessageType;
+
+        switch (message.type)
+        {
+        case MessageType::RegisterRequest:
+        {
+            bool registered = false;
+            try
+            {
+                registered = service.RegisterUser(message.fields[0], message.fields[1]);
+            }
+            catch (...)
+            {
+                registered = false;
+            }
+            return SendMessage(session, {
+                registered ? MessageType::RegisterSucceeded : MessageType::RegisterFailed,
+                message.requestId,
+                {}
+            });
+        }
+        case MessageType::LoginRequest:
+        {
+            bool authenticated = false;
+            if (!session->IsAuthenticated())
+            {
+                try
+                {
+                    authenticated = service.Authenticate(message.fields[0], message.fields[1]);
+                }
+                catch (...)
+                {
+                    authenticated = false;
+                }
+                authenticated = authenticated && session->TrySetAuthenticated(message.fields[0]);
+            }
+            return SendMessage(session, {
+                authenticated ? MessageType::LoginSucceeded : MessageType::LoginFailed,
+                message.requestId,
+                {}
+            });
+        }
+        case MessageType::ChatSend:
+        {
+            if (!session->IsAuthenticated())
+            {
+                CloseSession(session);
+                return false;
+            }
+
+            const std::string username = session->Username();
+            bool stored = false;
+            try
+            {
+                stored = service.StoreMessage(username, message.fields[0]);
+            }
+            catch (...)
+            {
+                stored = false;
+            }
+            if (!stored || session->IsClosed() || stopping.load())
+            {
+                CloseSession(session);
+                return false;
+            }
+
+            const auto recipients = SnapshotSessions(true);
+            for (const auto& recipient : recipients)
+            {
+                const std::uint32_t requestId = recipient == session ? message.requestId : 0;
+                SendMessage(recipient, {
+                    MessageType::ChatDelivered,
+                    requestId,
+                    { username, message.fields[0] }
+                });
+            }
+            return !session->IsClosed();
+        }
+        default:
+            CloseSession(session);
+            return false;
+        }
+    }
+
+    std::vector<std::shared_ptr<Session>> SnapshotSessions(bool authenticatedOnly) const
+    {
+        std::vector<std::shared_ptr<Session>> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex);
+            snapshot.reserve(sessions.size());
+            for (const auto& entry : sessions)
+            {
+                snapshot.push_back(entry.second);
+            }
+        }
+
+        if (authenticatedOnly)
+        {
+            snapshot.erase(
+                std::remove_if(
+                    snapshot.begin(),
+                    snapshot.end(),
+                    [](const std::shared_ptr<Session>& session) {
+                        return session->IsClosed() || !session->IsAuthenticated();
+                    }),
+                snapshot.end());
+        }
+        return snapshot;
+    }
+
+    void CloseSession(const std::shared_ptr<Session>& session)
+    {
+        session->Close();
+        std::lock_guard<std::mutex> lock(sessionsMutex);
+        const auto found = sessions.find(session->Id());
+        if (found != sessions.end() && found->second == session)
+        {
+            sessions.erase(found);
+        }
+    }
+
+    IChatService& service;
+    ServerOptions options;
+
+    std::atomic<bool> stopping{ false };
+    std::atomic<bool> started{ false };
+    bool wsaStarted = false;
+    std::atomic<SOCKET> listener{ INVALID_SOCKET };
+    HANDLE completionPort = nullptr;
+    HANDLE operationsDrainedEvent = nullptr;
+    HANDLE stopEvent = nullptr;
+    std::mutex stopEventMutex;
+    LPFN_ACCEPTEX acceptEx = nullptr;
+    std::atomic<std::uint16_t> boundPort{ 0 };
+    std::size_t configuredWorkerCount = 0;
+    std::vector<std::thread> workers;
+
+    std::mutex operationRegistrationMutex;
+
+    mutable std::mutex sessionsMutex;
+    std::unordered_map<SOCKET, std::shared_ptr<Session>> sessions;
+
+    std::atomic<std::uint64_t> operationsCreated{ 0 };
+    std::atomic<std::uint64_t> operationsRetired{ 0 };
+    std::atomic<std::uint64_t> outstandingOperations{ 0 };
+    std::atomic<std::size_t> pendingAccepts{ 0 };
+    std::atomic<std::uint64_t> sendQueueOverflows{ 0 };
+};
+
+Server::Server(IChatService& service, ServerOptions options)
+    : impl(std::make_unique<Impl>(service, options))
 {
 }
 
-Server::~Server()
+Server::~Server() = default;
+
+bool Server::Init(std::uint16_t port)
 {
-    Shutdown();
-}
-
-bool Server::Init(int port)
-{
-    listenPort = port;
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-    {
-        std::cerr << "WSAStartup failed" << std::endl;
-        return false;
-    }
-
-    serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (serverSocket == INVALID_SOCKET)
-    {
-        std::cerr << "Socket creation failed" << std::endl;
-        WSACleanup();
-        return false;
-    }
-
-    sockaddr_in serverAddr;
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(port);
-
-    if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
-    {
-        std::cerr << "Bind failed" << std::endl;
-        closesocket(serverSocket);
-        WSACleanup();
-        return false;
-    }
-
-    if (listen(serverSocket, SOMAXCONN) == SOCKET_ERROR)
-    {
-        std::cerr << "Listen failed" << std::endl;
-        closesocket(serverSocket);
-        WSACleanup();
-        return false;
-    }
-    std::cout << "Server is listening on port " << listenPort << "..." << std::endl;
-
-    // 데이터베이스 초기화
-    if (!DatabaseManager::GetInstance().Init())
-    {
-        std::cerr << "Database initialization failed" << std::endl;
-        return false;
-    }
-
-    std::string connectionString = "DRIVER={SQL Server};SERVER=localhost;DATABASE=ChatDB;Trusted_Connection=yes;";
-    if (!DatabaseManager::GetInstance().Connect(connectionString))
-    {
-        std::cerr << "Database connection failed" << std::endl;
-        return false;
-    }
-
-    isRunning = true;
-    return true;
+    return impl->Initialize(port);
 }
 
 void Server::Run()
 {
-    while (isRunning)
-    {
-        SOCKET clientSocket = accept(serverSocket, NULL, NULL);
-        if (clientSocket == INVALID_SOCKET)
-        {
-            if (isRunning)
-            {
-                std::cerr << "Accept failed" << std::endl;
-            }
-            continue;
-        }
+    impl->Wait();
+}
 
-        connectedClients.push_back(clientSocket);
-        std::thread clientThread(&Server::ClientLoop, this, clientSocket);
-        clientThread.detach();
-    }
+void Server::RequestStop()
+{
+    impl->RequestStop();
 }
 
 void Server::Shutdown()
 {
-    isRunning = false;
-    closesocket(serverSocket);
-    WSACleanup();
-    DatabaseManager::GetInstance().Cleanup();
+    impl->Stop();
 }
 
-void Server::ClientLoop(SOCKET clientSocket)
+std::uint16_t Server::GetBoundPort() const
 {
-    char buffer[4096];
-    while (isRunning)
-    {
-        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-        if (bytesReceived <= 0)
-        {
-            break;
-        }
+    return impl->Port();
+}
 
-        std::string data(buffer, bytesReceived);
-        std::istringstream iss(data);
-        std::string typeStr, sender, message;
-        
-        iss >> typeStr;
-        PacketType type = static_cast<PacketType>(std::stoi(typeStr));
-
-        switch (type)
-        {
-            case PACKET_TYPE_LOGIN:
-            {
-                iss >> sender >> message; // message는 비밀번호
-                bool success = DatabaseManager::GetInstance().ValidateUser(sender, message);
-                
-                std::string response = std::to_string(success ? PACKET_TYPE_LOGIN_SUCCESS : PACKET_TYPE_LOGIN_FAILED);
-                send(clientSocket, response.c_str(), response.length(), 0);
-                break;
-            }
-            case PACKET_TYPE_REGISTER:
-            {
-                iss >> sender >> message; // message는 비밀번호
-                bool success = DatabaseManager::GetInstance().RegisterUser(sender, message);
-                
-                std::string response = std::to_string(success ? PACKET_TYPE_REGISTER_SUCCESS : PACKET_TYPE_REGISTER_FAILED);
-                send(clientSocket, response.c_str(), response.length(), 0);
-                break;
-            }
-            case PACKET_TYPE_CHAT:
-            {
-                iss >> sender;
-                std::getline(iss, message);
-                if (!message.empty() && message[0] == ' ')
-                {
-                    message = message.substr(1);
-                }
-
-                // 메시지를 데이터베이스에 저장
-                DatabaseManager::GetInstance().SaveChatMessage(sender, message);
-
-                // 모든 클라이언트에게 메시지 브로드캐스트
-                std::string broadcast = std::to_string(PACKET_TYPE_CHAT) + " " + sender + " " + message;
-                for (SOCKET sock : connectedClients)
-                {
-                    if (sock != clientSocket)
-                    {
-                        send(sock, broadcast.c_str(), broadcast.length(), 0);
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    // 클라이언트 연결 종료 처리
-    auto it = std::find(connectedClients.begin(), connectedClients.end(), clientSocket);
-    if (it != connectedClients.end())
-    {
-        connectedClients.erase(it);
-    }
-    closesocket(clientSocket);
+ServerDiagnostics Server::GetDiagnostics() const
+{
+    return impl->Diagnostics();
 }

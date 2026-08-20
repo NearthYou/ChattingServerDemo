@@ -1,27 +1,47 @@
-﻿#pragma once
+#pragma once
 
-#include <WinSock2.h>
-#include <string>
-#include <thread>
-#include <vector>
-#include "../Network/Session.h"
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
+class IChatService;
+
+struct ServerOptions
+{
+    std::size_t acceptPrepostCount = 16;
+    std::size_t workerCount = 0;
+    std::size_t maxQueuedSendBytes = 4 * 1024 * 1024;
+};
+
+struct ServerDiagnostics
+{
+    std::size_t workerCount = 0;
+    std::size_t pendingAccepts = 0;
+    std::size_t activeSessions = 0;
+    std::uint64_t operationsCreated = 0;
+    std::uint64_t operationsRetired = 0;
+    std::uint64_t outstandingOperations = 0;
+    std::uint64_t sendQueueOverflows = 0;
+};
 
 class Server
 {
 public:
-    Server();
+    explicit Server(IChatService& service, ServerOptions options = {});
     ~Server();
 
-    bool Init(int port = 8888);
+    Server(const Server&) = delete;
+    Server& operator=(const Server&) = delete;
+
+    bool Init(std::uint16_t port = 8888);
     void Run();
+    void RequestStop();
     void Shutdown();
 
-private:
-    void ClientLoop(SOCKET clientSocket);
+    std::uint16_t GetBoundPort() const;
+    ServerDiagnostics GetDiagnostics() const;
 
-    SOCKET serverSocket;
-    bool isRunning;
-    int listenPort;
-    std::vector<SOCKET> connectedClients;
-    std::vector<std::shared_ptr<Session>> sessions;
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl;
 };
