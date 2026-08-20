@@ -55,9 +55,18 @@ int Application::Run()
         else
             DrawChatUI();
 
-        for (auto& packet : Network.GetPendingMessages())
+        for (auto& event : Network.GetPendingEvents())
         {
-            AddChatMessage(packet.sender, packet.message, packet.isMine);
+            if (event.kind == NetworkEvent::Kind::Packet)
+            {
+                AddChatMessage(event.packet.sender, event.packet.message, event.packet.isMine);
+            }
+            else if (event.status == NetworkStatus::Disconnected ||
+                event.status == NetworkStatus::ProtocolError ||
+                event.status == NetworkStatus::QueueFull)
+            {
+                AddChatMessage("System", event.message, false);
+            }
         }
 
         ImGuiUI.EndFrame();
@@ -86,7 +95,10 @@ void Application::DrawLoginUI()
     {
         if (strlen(Nickname) > 0)
         {
-            Network.SendLoginRequest(Nickname, "");
+            if (!Network.SendLoginRequest(Nickname, ""))
+            {
+                showLoginFailedPopup = true;
+            }
         }
     }
     ImGui::SameLine();
@@ -109,7 +121,11 @@ void Application::DrawLoginUI()
         ImGui::InputText("Password", RegisterPassword, IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
         if (ImGui::Button("Register"))
         {
-            Network.SendRegisterRequest(RegisterNickname, RegisterPassword);
+            if (!Network.SendRegisterRequest(RegisterNickname, RegisterPassword))
+            {
+                registerResultMessage = "The registration request could not be queued.";
+                showRegisterResultPopup = true;
+            }
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -197,7 +213,10 @@ void Application::DrawChatUI()
     {
         if (strlen(InputBuffer) > 0)
         {
-            Network.SendChatMessage(Nickname, InputBuffer);
+            if (!Network.SendChatMessage(Nickname, InputBuffer))
+            {
+                AddChatMessage("System", "The message could not be queued.", false);
+            }
             InputBuffer[0] = '\0';
             ImGui::SetKeyboardFocusHere(-1);
         }
@@ -209,7 +228,10 @@ void Application::DrawChatUI()
     {
         if (strlen(InputBuffer) > 0)
         {
-            Network.SendChatMessage(Nickname, InputBuffer);
+            if (!Network.SendChatMessage(Nickname, InputBuffer))
+            {
+                AddChatMessage("System", "The message could not be queued.", false);
+            }
             InputBuffer[0] = '\0';
             ImGui::SetKeyboardFocusHere(-1);
         }
