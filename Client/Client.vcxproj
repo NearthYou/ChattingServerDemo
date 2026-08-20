@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="Core\ImGuiManager.h" />
     <ClInclude Include="UI\Application.h" />
+    <ClInclude Include="UI\ClientPacketReducer.h" />
     <ClInclude Include="UI\D3D11Manager.h" />
     <ClInclude Include="Network\NetworkManager.h" />
     <ClInclude Include="Network\NetworkPrimitives.h" />
@@ -36,6 +37,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="UI\Application.cpp" />
+    <ClCompile Include="UI\ClientPacketReducer.cpp" />
     <ClCompile Include="UI\D3D11Manager.cpp" />
     <ClCompile Include="Core\ImGuiManager.cpp" />
     <ClCompile Include="Core\main.cpp" />

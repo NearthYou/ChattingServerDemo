@@ -99,7 +99,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;odbc32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -116,7 +116,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;odbc32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -137,7 +137,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;odbc32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -158,22 +158,34 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;odbc32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Core\main.cpp" />
     <ClCompile Include="Core\Server.cpp" />
+    <ClCompile Include="Application\DatabaseChatService.cpp" />
+    <ClCompile Include="Application\DatabaseExecutor.cpp" />
+    <ClCompile Include="Application\InputValidation.cpp" />
     <ClCompile Include="Database\DatabaseManager.cpp" />
+    <ClCompile Include="Database\OdbcDriverDiscovery.cpp" />
+    <ClCompile Include="Database\OdbcUnicode.cpp" />
     <ClCompile Include="Network\Session.cpp" />
+    <ClCompile Include="Security\PasswordHasher.cpp" />
     <ClCompile Include="..\Common\Protocol\ChatProtocol.cpp" />
     <ClCompile Include="..\Common\Utils\StringUtils.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Application\IChatService.h" />
+    <ClInclude Include="Application\DatabaseChatService.h" />
+    <ClInclude Include="Application\DatabaseExecutor.h" />
+    <ClInclude Include="Application\InputValidation.h" />
     <ClInclude Include="Core\Server.h" />
     <ClInclude Include="Database\DatabaseManager.h" />
+    <ClInclude Include="Database\OdbcDriverDiscovery.h" />
+    <ClInclude Include="Database\OdbcUnicode.h" />
     <ClInclude Include="Network\Session.h" />
+    <ClInclude Include="Security\PasswordHasher.h" />
     <ClInclude Include="..\Common\Protocol\ChatProtocol.h" />
     <ClInclude Include="..\Common\PacketDefine.h" />
   </ItemGroup>

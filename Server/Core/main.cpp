@@ -1,13 +1,18 @@
 #include "Server.h"
 
-#include "../Application/IChatService.h"
-#include "../Database/DatabaseManager.h"
+#include "../Application/DatabaseChatService.h"
+#include "../../Common/Utils/StringUtils.h"
+
+#include <Windows.h>
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
-#include <mutex>
+#include <limits>
 #include <string>
+#include <thread>
+#include <utility>
 
 namespace
 {
@@ -33,87 +38,189 @@ namespace
         }
     }
 
-    class DatabaseChatService final : public IChatService
+    std::string Environment(const char* name)
     {
-    public:
-        bool RegisterUser(const std::string& username, const std::string& password) override
+        char* value = nullptr;
+        std::size_t valueBytes = 0;
+        if (_dupenv_s(&value, &valueBytes, name) != 0 || value == nullptr)
         {
-            std::lock_guard<std::mutex> lock(databaseMutex);
-            return DatabaseManager::GetInstance().RegisterUser(username, password);
+            return {};
         }
 
-        bool Authenticate(const std::string& username, const std::string& password) override
-        {
-            std::lock_guard<std::mutex> lock(databaseMutex);
-            return DatabaseManager::GetInstance().ValidateUser(username, password);
-        }
+        std::string result(value);
+        SecureZeroMemory(value, valueBytes);
+        std::free(value);
+        return result;
+    }
 
-        bool StoreMessage(const std::string& username, const std::string& message) override
-        {
-            std::lock_guard<std::mutex> lock(databaseMutex);
-            return DatabaseManager::GetInstance().SaveChatMessage(username, message);
-        }
-
-    private:
-        std::mutex databaseMutex;
-    };
-
-    std::uint16_t ReadPort()
+    bool ParseUnsigned(const std::string& text, unsigned long maximum, unsigned long& value)
     {
-        std::cout << "Enter server port (default: 8888): ";
-        std::string input;
-        std::getline(std::cin, input);
-        if (input.empty())
+        if (text.empty())
         {
-            return 8888;
+            return false;
         }
-
         try
         {
-            const unsigned long parsed = std::stoul(input);
-            if (parsed > 0 && parsed <= 65535)
+            std::size_t consumed = 0;
+            const unsigned long parsed = std::stoul(text, &consumed);
+            if (consumed != text.size() || parsed == 0 || parsed > maximum)
             {
-                return static_cast<std::uint16_t>(parsed);
+                return false;
             }
+            value = parsed;
+            return true;
         }
         catch (...)
         {
+            return false;
         }
-        return 0;
+    }
+
+    bool ReadPort(int argumentCount, char** arguments, std::uint16_t& port)
+    {
+        std::string value = Environment("CHAT_SERVER_PORT");
+        if (value.empty())
+        {
+            value = "8888";
+        }
+
+        for (int index = 1; index < argumentCount; ++index)
+        {
+            const std::string argument = arguments[index];
+            if (argument == "--port" && index + 1 < argumentCount)
+            {
+                value = arguments[++index];
+            }
+            else if (argument.rfind("--port=", 0) == 0)
+            {
+                value = argument.substr(7);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        unsigned long parsed = 0;
+        if (!ParseUnsigned(value, 65535, parsed))
+        {
+            return false;
+        }
+        port = static_cast<std::uint16_t>(parsed);
+        return true;
+    }
+
+    bool ReadDatabaseConfig(DatabaseConfig& config)
+    {
+        config.host = Environment("CHAT_DB_HOST");
+        if (config.host.empty())
+        {
+            config.host = "127.0.0.1";
+        }
+        config.database = Environment("CHAT_DB_NAME");
+        if (config.database.empty())
+        {
+            config.database = "chatdb";
+        }
+        config.username = Environment("CHAT_DB_USER");
+        config.password = Environment("CHAT_DB_PASSWORD");
+        if (config.username.empty() || config.password.empty())
+        {
+            return false;
+        }
+
+        const std::string driver = Environment("CHAT_DB_DRIVER");
+        if (!driver.empty() && !StringUtils::TryStringToWString(driver, config.driverOverride))
+        {
+            return false;
+        }
+
+        const std::string port = Environment("CHAT_DB_PORT");
+        unsigned long parsed = 3307;
+        if (!port.empty() && !ParseUnsigned(port, 65535, parsed))
+        {
+            return false;
+        }
+        config.port = static_cast<std::uint16_t>(parsed);
+
+        const std::string loginTimeout = Environment("CHAT_DB_LOGIN_TIMEOUT_SECONDS");
+        if (!loginTimeout.empty() &&
+            !ParseUnsigned(loginTimeout, (std::numeric_limits<std::uint32_t>::max)(), parsed))
+        {
+            return false;
+        }
+        if (!loginTimeout.empty())
+        {
+            config.loginTimeoutSeconds = static_cast<std::uint32_t>(parsed);
+        }
+
+        const std::string statementTimeout = Environment("CHAT_DB_STATEMENT_TIMEOUT_SECONDS");
+        if (!statementTimeout.empty() &&
+            !ParseUnsigned(statementTimeout, (std::numeric_limits<std::uint32_t>::max)(), parsed))
+        {
+            return false;
+        }
+        if (!statementTimeout.empty())
+        {
+            config.statementTimeoutSeconds = static_cast<std::uint32_t>(parsed);
+        }
+        return true;
     }
 }
 
-int main()
+int main(int argumentCount, char** arguments)
 {
-    const std::uint16_t port = ReadPort();
-    if (port == 0)
+    std::uint16_t port = 0;
+    if (!ReadPort(argumentCount, arguments, port))
     {
-        std::cerr << "Invalid port" << std::endl;
+        std::cerr << "Usage: Server.exe [--port <1-65535>]" << std::endl;
         return 1;
     }
 
-    auto& database = DatabaseManager::GetInstance();
-    if (!database.Init())
+    DatabaseConfig databaseConfig;
+    if (!ReadDatabaseConfig(databaseConfig))
     {
-        std::cerr << "Database initialization failed" << std::endl;
+        std::cerr << "Set valid CHAT_DB_USER, CHAT_DB_PASSWORD, and optional CHAT_DB_* settings." << std::endl;
+        return 1;
+    }
+    if (_putenv_s("CHAT_DB_PASSWORD", "") != 0)
+    {
+        if (!databaseConfig.password.empty())
+        {
+            SecureZeroMemory(databaseConfig.password.data(), databaseConfig.password.size());
+            databaseConfig.password.clear();
+        }
+        std::cerr << "Could not remove CHAT_DB_PASSWORD from the server environment." << std::endl;
         return 1;
     }
 
-    const std::string connectionString =
-        "DRIVER={SQL Server};SERVER=localhost;DATABASE=ChatDB;Trusted_Connection=yes;";
-    if (!database.Connect(connectionString))
+    HANDLE externalStopEvent = nullptr;
+    const std::string externalStopEventUtf8 = Environment("CHAT_SERVER_STOP_EVENT");
+    if (!externalStopEventUtf8.empty())
     {
-        std::cerr << "Database connection failed" << std::endl;
-        database.Cleanup();
-        return 1;
+        std::wstring externalStopEventName;
+        if (!StringUtils::TryStringToWString(externalStopEventUtf8, externalStopEventName))
+        {
+            std::cerr << "CHAT_SERVER_STOP_EVENT is not valid UTF-8." << std::endl;
+            return 1;
+        }
+        externalStopEvent = CreateEventW(nullptr, TRUE, FALSE, externalStopEventName.c_str());
+        if (externalStopEvent == nullptr)
+        {
+            std::cerr << "Could not create the external stop event." << std::endl;
+            return 1;
+        }
     }
 
-    DatabaseChatService service;
+    DatabaseChatService service(std::move(databaseConfig));
     Server server(service);
     if (!server.Init(port))
     {
-        std::cerr << "Server initialization failed" << std::endl;
-        database.Cleanup();
+        std::cerr << "Server initialization failed." << std::endl;
+        if (externalStopEvent != nullptr)
+        {
+            CloseHandle(externalStopEvent);
+        }
         return 1;
     }
 
@@ -122,19 +229,46 @@ int main()
     if (!SetConsoleCtrlHandler(HandleConsoleControl, TRUE))
     {
         activeServer.store(nullptr);
-        std::cerr << "Console control handler registration failed" << std::endl;
+        std::cerr << "Console control handler registration failed." << std::endl;
         server.Shutdown();
-        database.Cleanup();
+        if (externalStopEvent != nullptr)
+        {
+            CloseHandle(externalStopEvent);
+        }
         return 1;
     }
 
-    std::cout << "Press Ctrl+C to stop the server." << std::endl;
+    std::thread externalStopMonitor;
+    if (externalStopEvent != nullptr)
+    {
+        try
+        {
+            externalStopMonitor = std::thread([&server, externalStopEvent] {
+                if (WaitForSingleObject(externalStopEvent, INFINITE) == WAIT_OBJECT_0)
+                {
+                    server.RequestStop();
+                }
+            });
+        }
+        catch (...)
+        {
+            activeServer.store(nullptr);
+            SetConsoleCtrlHandler(HandleConsoleControl, FALSE);
+            server.Shutdown();
+            CloseHandle(externalStopEvent);
+            std::cerr << "Could not create the external stop monitor." << std::endl;
+            return 1;
+        }
+    }
     server.Run();
-
+    if (externalStopEvent != nullptr)
+    {
+        SetEvent(externalStopEvent);
+        externalStopMonitor.join();
+        CloseHandle(externalStopEvent);
+    }
     activeServer.store(nullptr);
     SetConsoleCtrlHandler(HandleConsoleControl, FALSE);
-
     server.Shutdown();
-    database.Cleanup();
     return 0;
 }

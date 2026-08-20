@@ -8,6 +8,8 @@
 
 bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
 {
+    ServerIp = ip;
+    ServerPort = port;
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, Application::WndProc, 0L, 0L,
         hInstance, NULL, NULL, NULL, NULL, L"ImGui Chat Client", NULL };
     RegisterClassEx(&wc);
@@ -23,9 +25,13 @@ bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
 
     ImGuiUI.Init(hWnd, D3D.GetDevice(), D3D.GetDeviceContext());
 
-    if (!Network.Connect(ip, port)) {
-        MessageBoxA(NULL, "서버에 연결할 수 없습니다.", "오류", MB_ICONERROR | MB_OK);
-        return false;
+    if (Network.Connect(ServerIp, ServerPort))
+    {
+        ConnectionStatus = "Connected.";
+    }
+    else
+    {
+        ConnectionStatus = "Disconnected. Start the server and reconnect.";
     }
 
     return true;
@@ -50,7 +56,7 @@ int Application::Run()
         D3D.BeginFrame();
         ImGuiUI.BeginFrame();
 
-        if (!LoggedIn)
+        if (!ClientState.IsLoggedIn())
             DrawLoginUI();
         else
             DrawChatUI();
@@ -59,11 +65,37 @@ int Application::Run()
         {
             if (event.kind == NetworkEvent::Kind::Packet)
             {
-                AddChatMessage(event.packet.sender, event.packet.message, event.packet.isMine);
+                switch (event.packet.type)
+                {
+                case PACKET_TYPE_LOGIN_SUCCESS:
+                    ClientState.Apply(event.packet);
+                    break;
+                case PACKET_TYPE_LOGIN_FAILED:
+                    showLoginFailedPopup = true;
+                    break;
+                case PACKET_TYPE_REGISTER_SUCCESS:
+                    registerResultMessage = "Registration succeeded.";
+                    showRegisterResultPopup = true;
+                    break;
+                case PACKET_TYPE_REGISTER_FAILED:
+                    registerResultMessage = "Registration failed.";
+                    showRegisterResultPopup = true;
+                    break;
+                case PACKET_TYPE_CHAT:
+                    ClientState.Apply(event.packet);
+                    break;
+                case PACKET_TYPE_LOGIN:
+                case PACKET_TYPE_REGISTER:
+                    break;
+                }
             }
             else if (event.status == NetworkStatus::Disconnected ||
-                event.status == NetworkStatus::ProtocolError ||
-                event.status == NetworkStatus::QueueFull)
+                event.status == NetworkStatus::ProtocolError)
+            {
+                ClientState.Disconnect();
+                ConnectionStatus = event.message.empty() ? "Disconnected." : event.message;
+            }
+            else if (event.status == NetworkStatus::QueueFull)
             {
                 AddChatMessage("System", event.message, false);
             }
@@ -78,6 +110,8 @@ int Application::Run()
 
 void Application::Shutdown()
 {
+    SecureZeroMemory(LoginPassword, sizeof(LoginPassword));
+    SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
     Network.Disconnect();
     ImGuiUI.Shutdown();
     D3D.Cleanup();
@@ -89,20 +123,39 @@ void Application::Shutdown()
 void Application::DrawLoginUI()
 {
     ImGui::Begin("Login", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::InputText("Nickname", Nickname, IM_ARRAYSIZE(Nickname));
-
-    if (ImGui::Button("Login"))
+    ImGui::TextUnformatted(ConnectionStatus.c_str());
+    if (!Network.IsConnected())
     {
-        if (strlen(Nickname) > 0)
+        if (ImGui::Button("Reconnect"))
         {
-            if (!Network.SendLoginRequest(Nickname, ""))
+            if (Network.Connect(ServerIp, ServerPort))
+            {
+                ConnectionStatus = "Connected. Log in to reload recent history.";
+            }
+            else
+            {
+                ConnectionStatus = "Reconnect failed. Check the server and try again.";
+            }
+        }
+        ImGui::Separator();
+    }
+    ImGui::InputText("Nickname", Nickname, IM_ARRAYSIZE(Nickname));
+    ImGui::InputText("Password", LoginPassword, IM_ARRAYSIZE(LoginPassword), ImGuiInputTextFlags_Password);
+
+    if (Network.IsConnected() && ImGui::Button("Login"))
+    {
+        if (strlen(Nickname) > 0 && strlen(LoginPassword) > 0)
+        {
+            const bool queued = Network.SendLoginRequest(Nickname, LoginPassword);
+            SecureZeroMemory(LoginPassword, sizeof(LoginPassword));
+            if (!queued)
             {
                 showLoginFailedPopup = true;
             }
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Register"))
+    if (Network.IsConnected() && ImGui::Button("Register"))
     {
         showRegisterPopup = true;
         RegisterNickname[0] = 0;
@@ -121,16 +174,23 @@ void Application::DrawLoginUI()
         ImGui::InputText("Password", RegisterPassword, IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
         if (ImGui::Button("Register"))
         {
-            if (!Network.SendRegisterRequest(RegisterNickname, RegisterPassword))
+            if (strlen(RegisterNickname) == 0 || strlen(RegisterPassword) == 0)
+            {
+                registerResultMessage = "Nickname and password are required.";
+                showRegisterResultPopup = true;
+            }
+            else if (!Network.SendRegisterRequest(RegisterNickname, RegisterPassword))
             {
                 registerResultMessage = "The registration request could not be queued.";
                 showRegisterResultPopup = true;
             }
+            SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel"))
         {
+            SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -184,16 +244,16 @@ void Application::DrawChatUI()
         ImGuiWindowFlags_NoScrollWithMouse
     );
 
-    for (auto& msg : ChatLog)
+    for (const auto& msg : ClientState.ChatMessages())
     {
-        if (msg.IsMine)
+        if (msg.isMine)
         {
             ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f);
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[Me] %s", msg.Text.c_str());
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[Me] %s", msg.text.c_str());
         }
         else
         {
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "[%s] %s", msg.Sender.c_str(), msg.Text.c_str());
+            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "[%s] %s", msg.sender.c_str(), msg.text.c_str());
         }
     }
 
@@ -242,15 +302,7 @@ void Application::DrawChatUI()
 
 void Application::AddChatMessage(const std::string& sender, const std::string& message, bool isMine)
 {
-    if (message == "Login/Register failed") {
-        showLoginFailedPopup = true;
-        return;
-    }
-    if (message == "Login/Register successful") {
-        LoggedIn = true;
-        return;
-    }
-    ChatLog.push_back({ sender, message, isMine });
+    ClientState.AppendChat(sender, message, isMine);
 }
 
 LRESULT WINAPI Application::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)

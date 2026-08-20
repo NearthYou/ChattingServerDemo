@@ -11,6 +11,7 @@ struct ServerOptions
     std::size_t acceptPrepostCount = 16;
     std::size_t workerCount = 0;
     std::size_t maxQueuedSendBytes = 4 * 1024 * 1024;
+    std::size_t maxQueuedDatabaseJobs = 256;
 };
 
 struct ServerDiagnostics
@@ -22,6 +23,7 @@ struct ServerDiagnostics
     std::uint64_t operationsRetired = 0;
     std::uint64_t outstandingOperations = 0;
     std::uint64_t sendQueueOverflows = 0;
+    std::uint64_t databaseQueueOverflows = 0;
 };
 
 class Server

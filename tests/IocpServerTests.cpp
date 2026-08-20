@@ -55,19 +55,53 @@ namespace
     class FakeChatService final : public IChatService
     {
     public:
+        ChatServiceStatus Start() override
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++startCalls;
+            return startStatus;
+        }
+
+        void Stop() override
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++stopCalls;
+        }
+
         void AddUser(const std::string& username, const std::string& password)
         {
             std::lock_guard<std::mutex> lock(mutex);
             users[username] = password;
         }
 
-        bool RegisterUser(const std::string& username, const std::string& password) override
+        void AddHistory(const std::string& username, const std::string& message)
         {
             std::lock_guard<std::mutex> lock(mutex);
-            return users.emplace(username, password).second;
+            history.push_back({ username, message });
         }
 
-        bool Authenticate(const std::string& username, const std::string& password) override
+        void SetUnavailable(bool unavailable)
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            operationsUnavailable = unavailable;
+        }
+
+        ChatServiceStatus RegisterUser(const std::string& username, const std::string& password) override
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (operationsUnavailable)
+            {
+                return ChatServiceStatus::Unavailable;
+            }
+            return users.emplace(username, password).second
+                ? ChatServiceStatus::Succeeded
+                : ChatServiceStatus::Conflict;
+        }
+
+        LoginResult Login(
+            const std::string& username,
+            const std::string& password,
+            std::size_t historyLimit) override
         {
             std::unique_lock<std::mutex> lock(mutex);
             if (blockNextAuthentication)
@@ -78,15 +112,36 @@ namespace
                 authenticationCondition.wait(lock, [this] { return authenticationReleased; });
             }
 
+            if (operationsUnavailable)
+            {
+                return { ChatServiceStatus::Unavailable, {} };
+            }
+
             const auto found = users.find(username);
-            return found != users.end() && found->second == password;
+            if (found == users.end() || found->second != password)
+            {
+                return { ChatServiceStatus::Rejected, {} };
+            }
+
+            const std::size_t first = history.size() > historyLimit
+                ? history.size() - historyLimit
+                : 0;
+            return {
+                ChatServiceStatus::Succeeded,
+                std::vector<ChatHistoryEntry>(history.begin() + first, history.end())
+            };
         }
 
-        bool StoreMessage(const std::string& username, const std::string& message) override
+        ChatServiceStatus StoreMessage(const std::string& username, const std::string& message) override
         {
             std::lock_guard<std::mutex> lock(mutex);
+            if (operationsUnavailable)
+            {
+                return ChatServiceStatus::Unavailable;
+            }
             storedMessages.emplace_back(username, message);
-            return true;
+            history.push_back({ username, message });
+            return ChatServiceStatus::Succeeded;
         }
 
         void BlockNextAuthentication()
@@ -120,11 +175,22 @@ namespace
             return storedMessages;
         }
 
+        std::pair<int, int> LifecycleCalls() const
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            return { startCalls, stopCalls };
+        }
+
     private:
         mutable std::mutex mutex;
         std::condition_variable authenticationCondition;
         std::unordered_map<std::string, std::string> users;
         std::vector<std::pair<std::string, std::string>> storedMessages;
+        std::vector<ChatHistoryEntry> history;
+        ChatServiceStatus startStatus = ChatServiceStatus::Succeeded;
+        bool operationsUnavailable = false;
+        int startCalls = 0;
+        int stopCalls = 0;
         bool blockNextAuthentication = false;
         bool authenticationEntered = false;
         bool authenticationReleased = false;
@@ -212,7 +278,7 @@ namespace
 
     void Login(SOCKET socketHandle, const std::string& username, std::uint32_t requestId)
     {
-        SendAll(socketHandle, Encode({ MessageType::LoginRequest, requestId, { username, "pw" } }));
+        SendAll(socketHandle, Encode({ MessageType::LoginRequest, requestId, { username, "password" } }));
         const auto replies = ReceiveMessages(socketHandle, 1);
         Require(replies[0].type == MessageType::LoginSucceeded, "login failed");
         Require(replies[0].requestId == requestId, "login request id was not preserved");
@@ -225,6 +291,8 @@ namespace
         Require(diagnostics.activeSessions == 0, "session remained active after shutdown");
         Require(diagnostics.pendingAccepts == 0, "AcceptEx remained pending after shutdown");
     }
+
+    void RequireConnectionClosed(SOCKET socketHandle);
 
     void TestPrepostedAcceptPoolAndShutdownCounters()
     {
@@ -263,8 +331,8 @@ namespace
     void TestFragmentedAndCoalescedFramesPreserveIdentityAndRequestIds()
     {
         FakeChatService service;
-        service.AddUser("alice", "pw");
-        service.AddUser("bob", "pw");
+        service.AddUser("alice", "password");
+        service.AddUser("bob", "password");
         Server server(service);
         Require(server.Init(0), "server init failed");
 
@@ -272,7 +340,7 @@ namespace
         SOCKET origin = Connect(server.GetBoundPort());
         Login(peer, "bob", 10);
 
-        auto login = Encode({ MessageType::LoginRequest, 20, { "alice", "pw" } });
+        auto login = Encode({ MessageType::LoginRequest, 20, { "alice", "password" } });
         auto chat = Encode({ MessageType::ChatSend, 21, { "hello" } });
         std::vector<std::uint8_t> coalesced = login;
         coalesced.insert(coalesced.end(), chat.begin(), chat.end());
@@ -297,6 +365,114 @@ namespace
         CloseSocket(origin);
         CloseSocket(peer);
         server.Shutdown();
+        RequireDrained(server.GetDiagnostics());
+    }
+
+    void TestLoginHistoryAndRegistrationState()
+    {
+        FakeChatService service;
+        service.AddUser("alice", "password");
+        service.AddHistory("bob", "older");
+        service.AddHistory("carol", "newer");
+        Server server(service);
+        Require(server.Init(0), "server init failed");
+
+        SOCKET login = Connect(server.GetBoundPort());
+        SendAll(login, Encode({ MessageType::LoginRequest, 41, { "alice", "password" } }));
+        const auto loginMessages = ReceiveMessages(login, 3);
+        Require(loginMessages[0].type == MessageType::LoginSucceeded, "login success was not first");
+        Require(loginMessages[0].requestId == 41, "login response request id changed");
+        Require(loginMessages[1].type == MessageType::ChatDelivered && loginMessages[1].requestId == 0,
+            "first history item was not an unsolicited delivery");
+        Require(loginMessages[1].fields == std::vector<std::string>({ "bob", "older" }),
+            "oldest history item was not first");
+        Require(loginMessages[2].fields == std::vector<std::string>({ "carol", "newer" }),
+            "history order changed");
+
+        SOCKET registration = Connect(server.GetBoundPort());
+        SendAll(registration, Encode({ MessageType::RegisterRequest, 42, { "dave", "password" } }));
+        const auto registrationReply = ReceiveMessages(registration, 1);
+        Require(registrationReply[0].type == MessageType::RegisterSucceeded, "registration failed");
+        SendAll(registration, Encode({ MessageType::ChatSend, 43, { "not-authenticated" } }));
+        RequireConnectionClosed(registration);
+
+        CloseSocket(login);
+        CloseSocket(registration);
+        server.Shutdown();
+        Require(service.LifecycleCalls() == std::pair<int, int>({ 1, 1 }), "service lifecycle count was not exact");
+        RequireDrained(server.GetDiagnostics());
+    }
+
+    void TestDatabaseUnavailableAndBlockedAuthenticationKeepIocpResponsive()
+    {
+        FakeChatService service;
+        service.AddUser("alice", "password");
+        service.BlockNextAuthentication();
+
+        ServerOptions options;
+        options.workerCount = 1;
+        Server server(service, options);
+        Require(server.Init(0), "server init failed");
+
+        SOCKET blocked = Connect(server.GetBoundPort());
+        SendAll(blocked, Encode({ MessageType::LoginRequest, 51, { "alice", "password" } }));
+        service.WaitForAuthenticationEntry();
+
+        SOCKET responsive = Connect(server.GetBoundPort());
+        WaitUntil(
+            [&server] { return server.GetDiagnostics().activeSessions >= 2; },
+            1s,
+            "blocked authentication stalled IOCP accepts");
+
+        service.ReleaseAuthentication();
+        Require(ReceiveMessages(blocked, 1)[0].type == MessageType::LoginSucceeded,
+            "released authentication did not finish");
+        service.SetUnavailable(true);
+        SendAll(responsive, Encode({ MessageType::LoginRequest, 52, { "alice", "password" } }));
+        Require(ReceiveMessages(responsive, 1)[0].type == MessageType::LoginFailed,
+            "database unavailability was not mapped to login failure");
+
+        CloseSocket(blocked);
+        CloseSocket(responsive);
+        server.Shutdown();
+        RequireDrained(server.GetDiagnostics());
+    }
+
+    void TestDatabaseQueueOverflowIsNonblockingAndDiagnostic()
+    {
+        FakeChatService service;
+        service.AddUser("alice", "password");
+        service.BlockNextAuthentication();
+
+        ServerOptions options;
+        options.workerCount = 2;
+        options.maxQueuedDatabaseJobs = 1;
+        Server server(service, options);
+        Require(server.Init(0), "server init failed");
+
+        SOCKET blocked = Connect(server.GetBoundPort());
+        SOCKET firstQueued = Connect(server.GetBoundPort());
+        SOCKET overflowing = Connect(server.GetBoundPort());
+        WaitUntil(
+            [&server] { return server.GetDiagnostics().activeSessions == 3; },
+            1s,
+            "overflow test sessions were not accepted");
+
+        SendAll(blocked, Encode({ MessageType::LoginRequest, 61, { "alice", "password" } }));
+        service.WaitForAuthenticationEntry();
+        SendAll(firstQueued, Encode({ MessageType::LoginRequest, 62, { "alice", "password" } }));
+        SendAll(overflowing, Encode({ MessageType::LoginRequest, 63, { "alice", "password" } }));
+        WaitUntil(
+            [&server] { return server.GetDiagnostics().databaseQueueOverflows == 1; },
+            1s,
+            "database queue overflow was not recorded without blocking IOCP");
+
+        service.ReleaseAuthentication();
+        CloseSocket(blocked);
+        CloseSocket(firstQueued);
+        CloseSocket(overflowing);
+        server.Shutdown();
+        Require(server.GetDiagnostics().databaseQueueOverflows == 1, "database queue overflow count changed");
         RequireDrained(server.GetDiagnostics());
     }
 
@@ -338,7 +514,7 @@ namespace
     void TestUnauthenticatedAndSpoofedChatAreRejected()
     {
         FakeChatService service;
-        service.AddUser("alice", "pw");
+        service.AddUser("alice", "password");
         Server server(service);
         Require(server.Init(0), "server init failed");
 
@@ -361,7 +537,7 @@ namespace
     void TestDisconnectDuringReceiveBlockedAuthenticationAndQueuedSend()
     {
         FakeChatService service;
-        service.AddUser("alice", "pw");
+        service.AddUser("alice", "password");
         service.BlockNextAuthentication();
         ServerOptions options;
         options.workerCount = 1;
@@ -373,14 +549,14 @@ namespace
         CloseSocket(receiving);
 
         SOCKET blocked = Connect(server.GetBoundPort());
-        SendAll(blocked, Encode({ MessageType::LoginRequest, 3, { "alice", "pw" } }));
+        SendAll(blocked, Encode({ MessageType::LoginRequest, 3, { "alice", "password" } }));
         service.WaitForAuthenticationEntry();
         CloseSocket(blocked);
         service.ReleaseAuthentication();
 
         SOCKET queued = Connect(server.GetBoundPort());
         Login(queued, "alice", 4);
-        const std::string queuedMessage(256, 'x');
+        const std::string queuedMessage(1000, 'x');
         std::vector<std::uint8_t> coalesced;
         for (std::uint32_t requestId = 5; requestId < 15; ++requestId)
         {
@@ -457,13 +633,14 @@ namespace
         FakeChatService service;
         for (int index = 0; index < clientCount; ++index)
         {
-            service.AddUser("user" + std::to_string(index), "pw");
+            service.AddUser("user" + std::to_string(index), "password");
         }
 
         ServerOptions options;
         options.acceptPrepostCount = 32;
         options.workerCount = 8;
         options.maxQueuedSendBytes = 16 * 1024 * 1024;
+        options.maxQueuedDatabaseJobs = 2048;
         Server server(service, options);
         Require(server.Init(0), "server init failed");
 
@@ -551,6 +728,9 @@ int main()
     {
         Run("preposted accepts and shutdown counters", TestPrepostedAcceptPoolAndShutdownCounters);
         Run("fragmented and coalesced real frames", TestFragmentedAndCoalescedFramesPreserveIdentityAndRequestIds);
+        Run("login history and registration state", TestLoginHistoryAndRegistrationState);
+        Run("database isolation and unavailable mapping", TestDatabaseUnavailableAndBlockedAuthenticationKeepIocpResponsive);
+        Run("database queue overflow diagnostics", TestDatabaseQueueOverflowIsNonblockingAndDiagnostic);
         Run("authentication identity and spoof rejection", TestUnauthenticatedAndSpoofedChatAreRejected);
         Run("disconnect and bounded queued send", TestDisconnectDuringReceiveBlockedAuthenticationAndQueuedSend);
         Run("pure partial-send offset", TestPurePartialSendOffset);

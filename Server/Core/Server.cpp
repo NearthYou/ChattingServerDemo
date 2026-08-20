@@ -1,6 +1,8 @@
 #include "Server.h"
 
 #include "../Application/IChatService.h"
+#include "../Application/DatabaseExecutor.h"
+#include "../Application/InputValidation.h"
 #include "../Network/Session.h"
 
 #include <WinSock2.h>
@@ -56,13 +58,14 @@ class Server::Impl
 {
 public:
     Impl(IChatService& chatService, ServerOptions serverOptions)
-        : service(chatService),
-          options(serverOptions)
+        : options(serverOptions),
+          databaseExecutor(chatService, serverOptions.maxQueuedDatabaseJobs)
     {
         options.acceptPrepostCount = std::max<std::size_t>(1, options.acceptPrepostCount);
         options.maxQueuedSendBytes = std::max<std::size_t>(
             chat::protocol::kFrameHeaderBytes + 8,
             options.maxQueuedSendBytes);
+        options.maxQueuedDatabaseJobs = std::max<std::size_t>(1, options.maxQueuedDatabaseJobs);
     }
 
     ~Impl()
@@ -77,14 +80,21 @@ public:
             return false;
         }
 
+        started.store(true);
+        stopping.store(false);
+        if (!databaseExecutor.Start())
+        {
+            started.store(false);
+            return false;
+        }
+
         WSADATA wsaData{};
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
         {
+            Stop();
             return false;
         }
         wsaStarted = true;
-        started.store(true);
-        stopping.store(false);
 
         completionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
         operationsDrainedEvent = CreateEventW(nullptr, TRUE, TRUE, nullptr);
@@ -230,6 +240,7 @@ public:
         }
 
         stopping.store(true);
+        databaseExecutor.StopAccepting();
         {
             std::lock_guard<std::mutex> lock(operationRegistrationMutex);
         }
@@ -246,6 +257,8 @@ public:
         {
             CloseSession(session);
         }
+
+        databaseExecutor.Stop();
 
         if (operationsDrainedEvent != nullptr)
         {
@@ -317,6 +330,7 @@ public:
         diagnostics.operationsRetired = operationsRetired.load();
         diagnostics.outstandingOperations = outstandingOperations.load();
         diagnostics.sendQueueOverflows = sendQueueOverflows.load();
+        diagnostics.databaseQueueOverflows = databaseQueueOverflows.load();
         return diagnostics;
     }
 
@@ -670,7 +684,7 @@ private:
 
         for (const auto& message : decoded.messages)
         {
-            if (!HandleMessage(session, message))
+            if (!QueueMessage(session, message))
             {
                 return;
             }
@@ -724,9 +738,31 @@ private:
         return false;
     }
 
-    bool HandleMessage(
+    bool QueueMessage(
         const std::shared_ptr<Session>& session,
         const chat::protocol::Message& message)
+    {
+        if (stopping.load() || session->IsClosed())
+        {
+            return false;
+        }
+
+        if (!databaseExecutor.TrySubmit(
+                [this, session, message](IChatService& executorService) {
+                    ProcessMessage(session, message, executorService);
+                }))
+        {
+            databaseQueueOverflows.fetch_add(1);
+            CloseSession(session);
+            return false;
+        }
+        return true;
+    }
+
+    void ProcessMessage(
+        const std::shared_ptr<Session>& session,
+        const chat::protocol::Message& message,
+        IChatService& executorService)
     {
         using chat::protocol::Message;
         using chat::protocol::MessageType;
@@ -735,64 +771,99 @@ private:
         {
         case MessageType::RegisterRequest:
         {
-            bool registered = false;
+            ChatServiceStatus status = ChatServiceStatus::Rejected;
+            if (!chat::validation::IsValidUsername(message.fields[0]) ||
+                !chat::validation::IsValidPassword(message.fields[1]))
+            {
+                SendMessage(session, { MessageType::RegisterFailed, message.requestId, {} });
+                return;
+            }
             try
             {
-                registered = service.RegisterUser(message.fields[0], message.fields[1]);
+                status = executorService.RegisterUser(message.fields[0], message.fields[1]);
             }
             catch (...)
             {
-                registered = false;
+                status = ChatServiceStatus::Unavailable;
             }
-            return SendMessage(session, {
-                registered ? MessageType::RegisterSucceeded : MessageType::RegisterFailed,
+            SendMessage(session, {
+                status == ChatServiceStatus::Succeeded
+                    ? MessageType::RegisterSucceeded
+                    : MessageType::RegisterFailed,
                 message.requestId,
                 {}
             });
+            return;
         }
         case MessageType::LoginRequest:
         {
-            bool authenticated = false;
-            if (!session->IsAuthenticated())
+            if (session->IsAuthenticated() ||
+                !chat::validation::IsValidUsername(message.fields[0]) ||
+                !chat::validation::IsValidPassword(message.fields[1]))
             {
-                try
-                {
-                    authenticated = service.Authenticate(message.fields[0], message.fields[1]);
-                }
-                catch (...)
-                {
-                    authenticated = false;
-                }
-                authenticated = authenticated && session->TrySetAuthenticated(message.fields[0]);
-            }
-            return SendMessage(session, {
-                authenticated ? MessageType::LoginSucceeded : MessageType::LoginFailed,
-                message.requestId,
-                {}
-            });
-        }
-        case MessageType::ChatSend:
-        {
-            if (!session->IsAuthenticated())
-            {
-                CloseSession(session);
-                return false;
+                SendMessage(session, { MessageType::LoginFailed, message.requestId, {} });
+                return;
             }
 
-            const std::string username = session->Username();
-            bool stored = false;
+            LoginResult result;
             try
             {
-                stored = service.StoreMessage(username, message.fields[0]);
+                result = executorService.Login(message.fields[0], message.fields[1], 50);
             }
             catch (...)
             {
-                stored = false;
+                result.status = ChatServiceStatus::Unavailable;
             }
-            if (!stored || session->IsClosed() || stopping.load())
+
+            const bool authenticated = result.status == ChatServiceStatus::Succeeded &&
+                session->TrySetAuthenticated(message.fields[0]);
+            if (!authenticated)
+            {
+                SendMessage(session, { MessageType::LoginFailed, message.requestId, {} });
+                return;
+            }
+
+            if (!SendMessage(session, { MessageType::LoginSucceeded, message.requestId, {} }))
+            {
+                return;
+            }
+            const std::size_t historyCount = std::min<std::size_t>(50, result.history.size());
+            for (std::size_t index = 0; index < historyCount; ++index)
+            {
+                if (!SendMessage(session, {
+                        MessageType::ChatDelivered,
+                        0,
+                        { result.history[index].username, result.history[index].message }
+                    }))
+                {
+                    return;
+                }
+            }
+            return;
+        }
+        case MessageType::ChatSend:
+        {
+            if (!session->IsAuthenticated() ||
+                !chat::validation::IsValidMessage(message.fields[0]))
             {
                 CloseSession(session);
-                return false;
+                return;
+            }
+
+            const std::string username = session->Username();
+            ChatServiceStatus status = ChatServiceStatus::Unavailable;
+            try
+            {
+                status = executorService.StoreMessage(username, message.fields[0]);
+            }
+            catch (...)
+            {
+                status = ChatServiceStatus::Unavailable;
+            }
+            if (status != ChatServiceStatus::Succeeded || session->IsClosed() || stopping.load())
+            {
+                CloseSession(session);
+                return;
             }
 
             const auto recipients = SnapshotSessions(true);
@@ -805,11 +876,11 @@ private:
                     { username, message.fields[0] }
                 });
             }
-            return !session->IsClosed();
+            return;
         }
         default:
             CloseSession(session);
-            return false;
+            return;
         }
     }
 
@@ -850,8 +921,8 @@ private:
         }
     }
 
-    IChatService& service;
     ServerOptions options;
+    DatabaseExecutor databaseExecutor;
 
     std::atomic<bool> stopping{ false };
     std::atomic<bool> started{ false };
@@ -876,6 +947,7 @@ private:
     std::atomic<std::uint64_t> outstandingOperations{ 0 };
     std::atomic<std::size_t> pendingAccepts{ 0 };
     std::atomic<std::uint64_t> sendQueueOverflows{ 0 };
+    std::atomic<std::uint64_t> databaseQueueOverflows{ 0 };
 };
 
 Server::Server(IChatService& service, ServerOptions options)

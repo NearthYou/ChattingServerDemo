@@ -73,6 +73,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="IocpServerTests.cpp" />
+    <ClCompile Include="..\Server\Application\DatabaseExecutor.cpp" />
+    <ClCompile Include="..\Server\Application\InputValidation.cpp" />
     <ClCompile Include="..\Server\Core\Server.cpp" />
     <ClCompile Include="..\Server\Network\Session.cpp" />
     <ClCompile Include="..\Common\Protocol\ChatProtocol.cpp" />

@@ -1,9 +1,9 @@
 ﻿#pragma once
 
 #include "D3D11Manager.h"
+#include "ClientPacketReducer.h"
 #include "../Core/ImGuiManager.h"
 #include "../Network/NetworkManager.h"
-#include <vector>
 #include <string>
 
 class Application
@@ -23,25 +23,20 @@ private:
 private:
     HWND hWnd = nullptr;
     bool Running = true;
-    bool LoggedIn = false;
     bool showLoginFailedPopup = false;
     bool showRegisterPopup = false;
     char RegisterNickname[32] = {};
-    char RegisterPassword[32] = {};
+    char RegisterPassword[129] = {};
     bool showRegisterResultPopup = false;
     std::string registerResultMessage;
+    std::string ServerIp;
+    int ServerPort = 0;
+    std::string ConnectionStatus;
 
     char Nickname[32] = {};
+    char LoginPassword[129] = {};
     char InputBuffer[256] = {};  // 한글 대응: char[]로 유지
-
-    struct ChatMessage
-    {
-        std::string Sender;
-        std::string Text;
-        bool IsMine = false;
-    };
-
-    std::vector<ChatMessage> ChatLog;
+    ClientPacketReducer ClientState;
 
     D3D11Manager D3D;
     ImGuiManager ImGuiUI;

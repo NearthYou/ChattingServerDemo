@@ -1,0 +1,28 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3307:3306"
+    env_file:
+      - .env.local
+    environment:
+      MYSQL_DATABASE: ${CHAT_DB_NAME:-chatdb}
+      MYSQL_USER: ${CHAT_DB_USER}
+      MYSQL_PASSWORD: ${CHAT_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - chat_mysql_data:/var/lib/mysql
+      - ./Server/Database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --silent -h 127.0.0.1 -u root -p\"$${MYSQL_ROOT_PASSWORD}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  chat_mysql_data:

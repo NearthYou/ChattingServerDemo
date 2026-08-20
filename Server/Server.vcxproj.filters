@@ -16,8 +16,17 @@
     <Filter Include="Common">
       <UniqueIdentifier>{98CA7945-18F7-402C-BE9C-A10F458D681A}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Security">
+      <UniqueIdentifier>{A2A3CF85-EE29-43F7-8513-FDEBE0E69393}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Application\DatabaseChatService.cpp"><Filter>Application</Filter></ClCompile>
+    <ClCompile Include="Application\DatabaseExecutor.cpp"><Filter>Application</Filter></ClCompile>
+    <ClCompile Include="Application\InputValidation.cpp"><Filter>Application</Filter></ClCompile>
+    <ClCompile Include="Database\OdbcDriverDiscovery.cpp"><Filter>Database</Filter></ClCompile>
+    <ClCompile Include="Database\OdbcUnicode.cpp"><Filter>Database</Filter></ClCompile>
+    <ClCompile Include="Security\PasswordHasher.cpp"><Filter>Security</Filter></ClCompile>
     <ClCompile Include="Core\main.cpp">
       <Filter>Core</Filter>
     </ClCompile>
@@ -38,6 +47,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Application\DatabaseChatService.h"><Filter>Application</Filter></ClInclude>
+    <ClInclude Include="Application\DatabaseExecutor.h"><Filter>Application</Filter></ClInclude>
+    <ClInclude Include="Application\InputValidation.h"><Filter>Application</Filter></ClInclude>
+    <ClInclude Include="Database\OdbcDriverDiscovery.h"><Filter>Database</Filter></ClInclude>
+    <ClInclude Include="Database\OdbcUnicode.h"><Filter>Database</Filter></ClInclude>
+    <ClInclude Include="Security\PasswordHasher.h"><Filter>Security</Filter></ClInclude>
     <ClInclude Include="Application\IChatService.h">
       <Filter>Application</Filter>
     </ClInclude>
