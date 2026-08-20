@@ -65,7 +65,6 @@ public:
         options.maxQueuedSendBytes = std::max<std::size_t>(
             chat::protocol::kFrameHeaderBytes + 8,
             options.maxQueuedSendBytes);
-        options.maxQueuedDatabaseJobs = std::max<std::size_t>(1, options.maxQueuedDatabaseJobs);
     }
 
     ~Impl()

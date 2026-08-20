@@ -17,6 +17,7 @@ private:
     void DrawLoginUI();
     void DrawChatUI();
     void AddChatMessage(const std::string& sender, const std::string& message, bool isMine);
+    bool SubmitCurrentMessage();
 
     static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 

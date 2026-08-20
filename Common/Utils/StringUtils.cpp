@@ -89,17 +89,4 @@ namespace StringUtils
         return true;
     }
 
-    std::wstring StringToWString(const std::string& str)
-    {
-        std::wstring result;
-        TryStringToWString(str, result);
-        return result;
-    }
-
-    std::string WStringToString(const std::wstring& wstr)
-    {
-        std::string result;
-        TryWStringToString(wstr, result);
-        return result;
-    }
 }

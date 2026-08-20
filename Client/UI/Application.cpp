@@ -271,13 +271,8 @@ void Application::DrawChatUI()
     if (ImGui::InputText("##Input", InputBuffer, IM_ARRAYSIZE(InputBuffer),
         ImGuiInputTextFlags_EnterReturnsTrue))
     {
-        if (strlen(InputBuffer) > 0)
+        if (SubmitCurrentMessage())
         {
-            if (!Network.SendChatMessage(Nickname, InputBuffer))
-            {
-                AddChatMessage("System", "The message could not be queued.", false);
-            }
-            InputBuffer[0] = '\0';
             ImGui::SetKeyboardFocusHere(-1);
         }
     }
@@ -286,18 +281,27 @@ void Application::DrawChatUI()
 
     if (ImGui::Button("Send"))
     {
-        if (strlen(InputBuffer) > 0)
+        if (SubmitCurrentMessage())
         {
-            if (!Network.SendChatMessage(Nickname, InputBuffer))
-            {
-                AddChatMessage("System", "The message could not be queued.", false);
-            }
-            InputBuffer[0] = '\0';
             ImGui::SetKeyboardFocusHere(-1);
         }
     }
 
     ImGui::End();
+}
+
+bool Application::SubmitCurrentMessage()
+{
+    if (strlen(InputBuffer) == 0)
+    {
+        return false;
+    }
+    if (!Network.SendChatMessage(InputBuffer))
+    {
+        AddChatMessage("System", "The message could not be queued.", false);
+    }
+    InputBuffer[0] = '\0';
+    return true;
 }
 
 void Application::AddChatMessage(const std::string& sender, const std::string& message, bool isMine)

@@ -180,7 +180,7 @@ bool NetworkManager::SendRegisterRequest(const std::string& username, const std:
     return QueueCommand(chat::protocol::MessageType::RegisterRequest, { username, password });
 }
 
-bool NetworkManager::SendChatMessage(const std::string&, const std::string& message)
+bool NetworkManager::SendChatMessage(const std::string& message)
 {
     return QueueCommand(chat::protocol::MessageType::ChatSend, { message });
 }

@@ -25,14 +25,6 @@ namespace protocol
         ChatDelivered = 8
     };
 
-    struct FrameHeader
-    {
-        std::uint32_t payloadBytes = 0;
-        std::uint16_t version = kProtocolVersion;
-        MessageType messageType = MessageType::LoginRequest;
-        std::uint32_t requestId = 0;
-    };
-
     struct Message
     {
         MessageType type = MessageType::LoginRequest;
@@ -64,7 +56,6 @@ namespace protocol
     };
 
     bool IsValidUtf8(const std::string& value);
-    bool IsKnownMessageType(MessageType type);
     CodecError ValidateMessage(const Message& message);
     EncodeResult EncodeMessage(const Message& message);
 
@@ -72,8 +63,6 @@ namespace protocol
     {
     public:
         DecodeResult Push(const std::uint8_t* data, std::size_t size);
-        void Reset();
-
     private:
         std::vector<std::uint8_t> buffer;
         CodecError terminalError = CodecError::None;

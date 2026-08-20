@@ -54,7 +54,7 @@ public:
 
     bool SendLoginRequest(const std::string& username, const std::string& password);
     bool SendRegisterRequest(const std::string& username, const std::string& password);
-    bool SendChatMessage(const std::string& username, const std::string& message);
+    bool SendChatMessage(const std::string& message);
     std::vector<NetworkEvent> GetPendingEvents();
 
 private:

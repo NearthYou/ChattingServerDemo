@@ -5,6 +5,14 @@
 
 namespace
 {
+    struct FrameHeader
+    {
+        std::uint32_t payloadBytes = 0;
+        std::uint16_t version = chat::protocol::kProtocolVersion;
+        chat::protocol::MessageType messageType = chat::protocol::MessageType::LoginRequest;
+        std::uint32_t requestId = 0;
+    };
+
     std::uint16_t ReadUint16(const std::uint8_t* bytes)
     {
         return static_cast<std::uint16_t>(
@@ -185,11 +193,6 @@ namespace protocol
         return true;
     }
 
-    bool IsKnownMessageType(MessageType type)
-    {
-        return ExpectedFieldCount(type) != std::numeric_limits<std::size_t>::max();
-    }
-
     CodecError ValidateMessage(const Message& message)
     {
         const std::size_t expectedFields = ExpectedFieldCount(message.type);
@@ -293,7 +296,7 @@ namespace protocol
                 terminalError = CodecError::UnsupportedVersion;
                 break;
             }
-            if (!IsKnownMessageType(header.messageType))
+            if (ExpectedFieldCount(header.messageType) == std::numeric_limits<std::size_t>::max())
             {
                 terminalError = CodecError::UnknownMessageType;
                 break;
@@ -337,10 +340,5 @@ namespace protocol
         return result;
     }
 
-    void StreamingDecoder::Reset()
-    {
-        buffer.clear();
-        terminalError = CodecError::None;
-    }
 }
 }
