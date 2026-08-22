@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 class IChatService;
 
@@ -36,11 +37,13 @@ public:
     Server& operator=(const Server&) = delete;
 
     bool Init(std::uint16_t port = 8888);
+    bool Init(const std::string& bindAddress, std::uint16_t port = 8888);
     void Run();
     void RequestStop();
     void Shutdown();
 
     std::uint16_t GetBoundPort() const;
+    std::string GetBoundAddress() const;
     ServerDiagnostics GetDiagnostics() const;
 
 private:

@@ -31,6 +31,12 @@ if ($preexistingProbe -lt 0 -or $composeUp -lt 0 -or $preexistingProbe -gt $comp
 if ($startScriptText -notmatch 'Test-ShouldStopComposeOnStartupFailure\s+-MysqlWasRunningBeforeStartup\s+\$mysqlWasRunningBeforeStartup') {
     throw 'Start script rollback does not use the recorded MySQL state.'
 }
+if ($startScriptText -notmatch '\[string\]\$BindAddress\s*=\s*''127\.0\.0\.1''' -or
+    $startScriptText -notmatch '''--bind-address''' -or
+    $startScriptText -notmatch 'Chat service started on' -or
+    $startScriptText -notmatch '\$BindAddress') {
+    throw 'Start script does not preserve the loopback default and pass or report the configured bind address.'
+}
 
 foreach ($script in $scripts) {
     $tokens = $null

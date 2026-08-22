@@ -33,6 +33,43 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 클라이언트는 저장소 빌드에서는 `Client\x64\Release\Client.exe`, 패키지에서는 `bin\Client.exe`입니다.
 
+기본 서버 bind 주소는 안전한 `127.0.0.1`입니다. 같은 LAN에서 접속해야 할 때만 호스트의 특정 IPv4를 명시합니다.
+
+```powershell
+.\scripts\Start-ChatService.ps1 -BindAddress 192.168.0.10 -Port 8888
+```
+
+`0.0.0.0`도 명시적으로 선택할 수 있지만 모든 IPv4 인터페이스에서 수신하므로 필요한 경우에만 사용합니다. 스크립트는 Windows 방화벽 규칙이나 라우터 설정을 변경하지 않습니다. 다른 PC에서 접속하려면 별도로 TCP 8888 접근 가능 여부를 사용자가 확인해야 합니다.
+
+서버가 시작되면 `Chat service started on <주소>:<포트>.`를 출력하고 `.run\server.json`에도 실제 bind 주소와 포트를 기록합니다. 클라이언트를 실행할 때 같은 주소와 포트를 입력합니다.
+
+## LAN 검증
+
+호스트에서 `ipconfig`로 실제 LAN IPv4를 확인한 뒤 해당 주소로 서비스를 시작합니다.
+
+```powershell
+.\scripts\Start-ChatService.ps1 -BindAddress 192.168.0.10 -Port 8888
+```
+
+같은 PC의 클라이언트가 `192.168.0.10:8888`로 접속하면 loopback이 아닌 인터페이스 bind와 클라이언트 연결 경로를 확인할 수 있습니다. 하지만 이것은 별도 장치 E2E가 아닙니다. 실제 호스트 경계를 검증하려면 같은 LAN의 다른 PC에서 `bin\Client.exe`를 실행해 가입, 로그인, 양방향 채팅, 서버 재시작 후 기록 복원을 확인해야 합니다.
+
+자동 live 테스트는 서버 실행 중 다음 환경 변수를 사용합니다. 먼저 `write` 단계 실행 후 서버를 정상 재시작하고 같은 ID로 `read` 단계를 실행합니다.
+
+```powershell
+$env:CHAT_LIVE_E2E_ADDRESS = '192.168.0.10'
+$env:CHAT_LIVE_E2E_PORT = '8888'
+$env:CHAT_LIVE_E2E_RUN_ID = '20260822'
+$env:CHAT_LIVE_E2E_PHASE = 'write'
+.\tests\x64\Release\ChatProtocolTests.exe
+
+.\scripts\Stop-ChatService.ps1
+.\scripts\Start-ChatService.ps1 -BindAddress 192.168.0.10 -Port 8888
+$env:CHAT_LIVE_E2E_PHASE = 'read'
+.\tests\x64\Release\ChatProtocolTests.exe
+```
+
+`write`는 서로 다른 두 계정의 가입, 로그인, 양방향 송수신을 검사하고 `read`는 재시작 후 두 메시지의 기록 복원을 검사합니다.
+
 ## 직접 실행 환경 변수
 
 서버를 직접 실행할 때 아래 값이 필요합니다.
@@ -45,12 +82,13 @@ CHAT_DB_USER=chatapp
 CHAT_DB_PASSWORD=...
 CHAT_DB_DRIVER=exact registered Unicode driver name   # 선택
 CHAT_SERVER_PORT=8888                          # 선택
+CHAT_SERVER_BIND_ADDRESS=127.0.0.1             # 선택, 기본값
 ```
 
-명령줄의 `--port`가 `CHAT_SERVER_PORT`보다 우선합니다.
+명령줄의 `--port`와 `--bind-address`가 대응하는 환경 변수보다 우선합니다.
 
 ```powershell
-.\Server\x64\Release\Server.exe --port 8888
+.\Server\x64\Release\Server.exe --bind-address 127.0.0.1 --port 8888
 ```
 
 연결 문자열과 비밀번호는 로그에 출력하지 않습니다.

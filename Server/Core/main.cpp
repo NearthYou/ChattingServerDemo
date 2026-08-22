@@ -76,8 +76,17 @@ namespace
         }
     }
 
-    bool ReadPort(int argumentCount, char** arguments, std::uint16_t& port)
+    bool ReadEndpoint(
+        int argumentCount,
+        char** arguments,
+        std::string& bindAddress,
+        std::uint16_t& port)
     {
+        bindAddress = Environment("CHAT_SERVER_BIND_ADDRESS");
+        if (bindAddress.empty())
+        {
+            bindAddress = "127.0.0.1";
+        }
         std::string value = Environment("CHAT_SERVER_PORT");
         if (value.empty())
         {
@@ -94,6 +103,14 @@ namespace
             else if (argument.rfind("--port=", 0) == 0)
             {
                 value = argument.substr(7);
+            }
+            else if (argument == "--bind-address" && index + 1 < argumentCount)
+            {
+                bindAddress = arguments[++index];
+            }
+            else if (argument.rfind("--bind-address=", 0) == 0)
+            {
+                bindAddress = argument.substr(15);
             }
             else
             {
@@ -170,10 +187,11 @@ namespace
 
 int main(int argumentCount, char** arguments)
 {
+    std::string bindAddress;
     std::uint16_t port = 0;
-    if (!ReadPort(argumentCount, arguments, port))
+    if (!ReadEndpoint(argumentCount, arguments, bindAddress, port))
     {
-        std::cerr << "Usage: Server.exe [--port <1-65535>]" << std::endl;
+        std::cerr << "Usage: Server.exe [--bind-address <IPv4>] [--port <1-65535>]" << std::endl;
         return 1;
     }
 
@@ -214,7 +232,7 @@ int main(int argumentCount, char** arguments)
 
     DatabaseChatService service(std::move(databaseConfig));
     Server server(service);
-    if (!server.Init(port))
+    if (!server.Init(bindAddress, port))
     {
         std::cerr << "Server initialization failed." << std::endl;
         if (externalStopEvent != nullptr)
@@ -224,7 +242,8 @@ int main(int argumentCount, char** arguments)
         return 1;
     }
 
-    std::cout << "Server is listening on 127.0.0.1:" << server.GetBoundPort() << std::endl;
+    std::cout << "Server is listening on "
+              << server.GetBoundAddress() << ':' << server.GetBoundPort() << std::endl;
     activeServer.store(&server);
     if (!SetConsoleCtrlHandler(HandleConsoleControl, TRUE))
     {

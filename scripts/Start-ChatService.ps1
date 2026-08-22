@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [string]$BindAddress = '127.0.0.1',
     [ValidateRange(1, 65535)]
     [int]$Port = 8888,
     [ValidateRange(10, 600)]
@@ -7,6 +8,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $PSBoundParameters.ContainsKey('BindAddress')) {
+    $environmentBindAddress = [Environment]::GetEnvironmentVariable('CHAT_SERVER_BIND_ADDRESS', 'Process')
+    if (-not [string]::IsNullOrWhiteSpace($environmentBindAddress)) {
+        $BindAddress = $environmentBindAddress
+    }
+}
+$parsedBindAddress = $null
+if (-not [Net.IPAddress]::TryParse($BindAddress, [ref]$parsedBindAddress) -or
+    $parsedBindAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+    throw 'BindAddress must be an IPv4 literal such as 127.0.0.1, a LAN address, or 0.0.0.0.'
+}
+$BindAddress = $parsedBindAddress.ToString()
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $composeFile = Join-Path $root 'docker-compose.yml'
 $envFile = Join-Path $root '.env.local'
@@ -186,7 +199,8 @@ try {
     [Environment]::SetEnvironmentVariable('CHAT_SERVER_STOP_EVENT', $stopEventName, 'Process')
 
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
-    $launchedProcess = Start-Process -FilePath $serverExe -ArgumentList @('--port', $Port) `
+    $launchedProcess = Start-Process -FilePath $serverExe `
+        -ArgumentList @('--bind-address', $BindAddress, '--port', $Port) `
         -WorkingDirectory (Split-Path -Parent $serverExe) -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 500
     if ($launchedProcess.HasExited) { throw "Server exited during startup with code $($launchedProcess.ExitCode)." }
@@ -195,10 +209,11 @@ try {
         executable = $serverExe
         startedUtc = [DateTime]::UtcNow.ToString('o')
         port = $Port
+        bindAddress = $BindAddress
         stopEvent = $stopEventName
     } | ConvertTo-Json
     [IO.File]::WriteAllText($runFile, $runRecord, [Text.UTF8Encoding]::new($false))
-    Write-Host "Chat service started on 127.0.0.1:$Port."
+    Write-Host "Chat service started on $BindAddress`:$Port."
 } catch {
     $startupFailure = $_
     Stop-LaunchedServer -LaunchedProcess $launchedProcess -StopEventName $stopEventName -ExpectedExecutable $serverExe

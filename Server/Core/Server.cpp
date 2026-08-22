@@ -72,7 +72,7 @@ public:
         Stop();
     }
 
-    bool Initialize(std::uint16_t requestedPort)
+    bool Initialize(const std::string& requestedAddress, std::uint16_t requestedPort)
     {
         if (started.load())
         {
@@ -94,6 +94,13 @@ public:
             return false;
         }
         wsaStarted = true;
+
+        IN_ADDR parsedAddress{};
+        if (InetPtonA(AF_INET, requestedAddress.c_str(), &parsedAddress) != 1)
+        {
+            Stop();
+            return false;
+        }
 
         completionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
         operationsDrainedEvent = CreateEventW(nullptr, TRUE, TRUE, nullptr);
@@ -132,7 +139,7 @@ public:
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_addr = parsedAddress;
         address.sin_port = htons(requestedPort);
         if (bind(
                 listenSocket,
@@ -154,6 +161,7 @@ public:
             return false;
         }
         boundPort.store(ntohs(address.sin_port));
+        boundAddress = requestedAddress;
 
         if (CreateIoCompletionPort(
                 reinterpret_cast<HANDLE>(listenSocket),
@@ -314,6 +322,11 @@ public:
     std::uint16_t Port() const
     {
         return boundPort.load();
+    }
+
+    std::string Address() const
+    {
+        return boundAddress;
     }
 
     ServerDiagnostics Diagnostics() const
@@ -937,6 +950,7 @@ private:
     std::mutex stopEventMutex;
     LPFN_ACCEPTEX acceptEx = nullptr;
     std::atomic<std::uint16_t> boundPort{ 0 };
+    std::string boundAddress = "127.0.0.1";
     std::size_t configuredWorkerCount = 0;
     std::vector<std::thread> workers;
 
@@ -962,7 +976,12 @@ Server::~Server() = default;
 
 bool Server::Init(std::uint16_t port)
 {
-    return impl->Initialize(port);
+    return impl->Initialize("127.0.0.1", port);
+}
+
+bool Server::Init(const std::string& bindAddress, std::uint16_t port)
+{
+    return impl->Initialize(bindAddress, port);
 }
 
 void Server::Run()
@@ -983,6 +1002,11 @@ void Server::Shutdown()
 std::uint16_t Server::GetBoundPort() const
 {
     return impl->Port();
+}
+
+std::string Server::GetBoundAddress() const
+{
+    return impl->Address();
 }
 
 ServerDiagnostics Server::GetDiagnostics() const

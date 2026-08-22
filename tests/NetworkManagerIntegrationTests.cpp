@@ -3,10 +3,13 @@
 
 #include <Ws2tcpip.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -18,6 +21,19 @@ namespace
     using namespace std::chrono_literals;
 
     int failures = 0;
+
+    std::string Environment(const char* name)
+    {
+        char* value = nullptr;
+        std::size_t valueBytes = 0;
+        if (_dupenv_s(&value, &valueBytes, name) != 0 || value == nullptr)
+        {
+            return {};
+        }
+        std::string result(value);
+        std::free(value);
+        return result;
+    }
 
     void Check(bool condition, const char* expression, const char* testName, int line)
     {
@@ -466,6 +482,151 @@ namespace
         CHECK(peerResult.loginFrameValid);
         CHECK(peerResult.responsesSent);
     }
+
+    std::vector<ChatPacket> WaitForLivePackets(
+        NetworkManager& manager,
+        const std::function<bool(const std::vector<ChatPacket>&)>& complete)
+    {
+        std::vector<ChatPacket> packets;
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            for (auto& event : manager.GetPendingEvents())
+            {
+                if (event.kind == NetworkEvent::Kind::Packet)
+                {
+                    packets.push_back(std::move(event.packet));
+                }
+            }
+            if (complete(packets))
+            {
+                break;
+            }
+            std::this_thread::sleep_for(10ms);
+        }
+        return packets;
+    }
+
+    bool ContainsChat(
+        const std::vector<ChatPacket>& packets,
+        const std::string& sender,
+        const std::string& message)
+    {
+        return std::any_of(
+            packets.begin(),
+            packets.end(),
+            [&](const ChatPacket& packet) {
+                return packet.type == PACKET_TYPE_CHAT &&
+                       packet.sender == sender &&
+                       packet.message == message;
+            });
+    }
+
+    void LiveLanServiceWriteOrRead()
+    {
+        const std::string address = Environment("CHAT_LIVE_E2E_ADDRESS");
+        const std::string phase = Environment("CHAT_LIVE_E2E_PHASE");
+        const std::string runId = Environment("CHAT_LIVE_E2E_RUN_ID");
+        if (address.empty() || phase.empty() || runId.empty())
+        {
+            return;
+        }
+
+        const int port = std::stoi(Environment("CHAT_LIVE_E2E_PORT"));
+        const std::string aliceName = "lana" + runId;
+        const std::string bobName = "lanb" + runId;
+        const std::string password = "LiveTestPassword123!";
+        const std::string aliceMessage = "history-a-" + runId;
+        const std::string bobMessage = "history-b-" + runId;
+
+        NetworkManager alice;
+        CHECK(alice.Connect(address, port));
+        if (!alice.IsConnected()) return;
+
+        if (phase == "write")
+        {
+            NetworkManager bob;
+            CHECK(bob.Connect(address, port));
+            if (!bob.IsConnected()) return;
+
+            CHECK(alice.SendRegisterRequest(aliceName, password));
+            const auto aliceRegistration = WaitForLivePackets(
+                alice,
+                [](const std::vector<ChatPacket>& packets) {
+                    return std::any_of(packets.begin(), packets.end(), [](const ChatPacket& packet) {
+                        return packet.type == PACKET_TYPE_REGISTER_SUCCESS;
+                    });
+                });
+            CHECK(std::any_of(aliceRegistration.begin(), aliceRegistration.end(), [](const ChatPacket& packet) {
+                return packet.type == PACKET_TYPE_REGISTER_SUCCESS;
+            }));
+
+            CHECK(bob.SendRegisterRequest(bobName, password));
+            const auto bobRegistration = WaitForLivePackets(
+                bob,
+                [](const std::vector<ChatPacket>& packets) {
+                    return std::any_of(packets.begin(), packets.end(), [](const ChatPacket& packet) {
+                        return packet.type == PACKET_TYPE_REGISTER_SUCCESS;
+                    });
+                });
+            CHECK(std::any_of(bobRegistration.begin(), bobRegistration.end(), [](const ChatPacket& packet) {
+                return packet.type == PACKET_TYPE_REGISTER_SUCCESS;
+            }));
+
+            CHECK(alice.SendLoginRequest(aliceName, password));
+            CHECK(bob.SendLoginRequest(bobName, password));
+            const auto aliceLogin = WaitForLivePackets(alice, [](const std::vector<ChatPacket>& packets) {
+                return std::any_of(packets.begin(), packets.end(), [](const ChatPacket& packet) {
+                    return packet.type == PACKET_TYPE_LOGIN_SUCCESS;
+                });
+            });
+            const auto bobLogin = WaitForLivePackets(bob, [](const std::vector<ChatPacket>& packets) {
+                return std::any_of(packets.begin(), packets.end(), [](const ChatPacket& packet) {
+                    return packet.type == PACKET_TYPE_LOGIN_SUCCESS;
+                });
+            });
+            CHECK(!aliceLogin.empty());
+            CHECK(!bobLogin.empty());
+
+            CHECK(alice.SendChatMessage(aliceMessage));
+            const auto aliceDelivery = WaitForLivePackets(
+                alice,
+                [&](const std::vector<ChatPacket>& packets) { return ContainsChat(packets, aliceName, aliceMessage); });
+            const auto bobReceivesAlice = WaitForLivePackets(
+                bob,
+                [&](const std::vector<ChatPacket>& packets) { return ContainsChat(packets, aliceName, aliceMessage); });
+            CHECK(ContainsChat(aliceDelivery, aliceName, aliceMessage));
+            CHECK(ContainsChat(bobReceivesAlice, aliceName, aliceMessage));
+
+            CHECK(bob.SendChatMessage(bobMessage));
+            const auto aliceReceivesBob = WaitForLivePackets(
+                alice,
+                [&](const std::vector<ChatPacket>& packets) { return ContainsChat(packets, bobName, bobMessage); });
+            const auto bobDelivery = WaitForLivePackets(
+                bob,
+                [&](const std::vector<ChatPacket>& packets) { return ContainsChat(packets, bobName, bobMessage); });
+            CHECK(ContainsChat(aliceReceivesBob, bobName, bobMessage));
+            CHECK(ContainsChat(bobDelivery, bobName, bobMessage));
+            bob.Disconnect();
+        }
+        else if (phase == "read")
+        {
+            CHECK(alice.SendLoginRequest(aliceName, password));
+            const auto restored = WaitForLivePackets(
+                alice,
+                [&](const std::vector<ChatPacket>& packets) {
+                    return ContainsChat(packets, aliceName, aliceMessage) &&
+                           ContainsChat(packets, bobName, bobMessage);
+                });
+            CHECK(ContainsChat(restored, aliceName, aliceMessage));
+            CHECK(ContainsChat(restored, bobName, bobMessage));
+        }
+        else
+        {
+            CHECK(false);
+        }
+        alice.Disconnect();
+    }
 }
 
 int RunNetworkManagerIntegrationTests()
@@ -481,6 +642,7 @@ int RunNetworkManagerIntegrationTests()
     BeginConnectReturnsPromptlyAndPublishesOrderedStatus();
     FailedConnectCanBeStoppedAndRetriedWithoutAStuckWorker();
     LoopbackPeerExercisesNetworkManagerFramingAndShutdown();
+    LiveLanServiceWriteOrRead();
 
     WSACleanup();
     return failures;

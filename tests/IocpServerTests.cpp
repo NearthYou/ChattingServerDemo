@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -35,6 +36,19 @@ namespace
         {
             throw std::runtime_error(message);
         }
+    }
+
+    std::string Environment(const char* name)
+    {
+        char* value = nullptr;
+        std::size_t valueBytes = 0;
+        if (_dupenv_s(&value, &valueBytes, name) != 0 || value == nullptr)
+        {
+            return {};
+        }
+        std::string result(value);
+        std::free(value);
+        return result;
     }
 
     template <typename Predicate>
@@ -282,21 +296,26 @@ namespace
         return messages;
     }
 
-    SOCKET Connect(std::uint16_t port)
+    SOCKET Connect(const std::string& host, std::uint16_t port)
     {
         SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         Require(socketHandle != INVALID_SOCKET, "client socket creation failed");
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Require(InetPtonA(AF_INET, host.c_str(), &address.sin_addr) == 1, "test connect address was invalid");
         address.sin_port = htons(port);
         if (connect(socketHandle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR)
         {
             closesocket(socketHandle);
-            throw std::runtime_error("loopback connect failed");
+            throw std::runtime_error("IPv4 connect failed");
         }
         return socketHandle;
+    }
+
+    SOCKET Connect(std::uint16_t port)
+    {
+        return Connect("127.0.0.1", port);
     }
 
     void CloseSocket(SOCKET& socketHandle)
@@ -369,6 +388,68 @@ namespace
         {
             CloseSocket(client);
         }
+    }
+
+    void TestBindAddressConfiguration()
+    {
+        FakeChatService defaultService;
+        Server defaultServer(defaultService);
+        Require(defaultServer.Init(0), "default loopback server init failed");
+        Require(defaultServer.GetBoundAddress() == "127.0.0.1", "default bind address must remain loopback");
+        defaultServer.Shutdown();
+        RequireDrained(defaultServer.GetDiagnostics());
+
+        FakeChatService anyService;
+        Server anyServer(anyService);
+        Require(anyServer.Init("0.0.0.0", 0), "explicit any-address server init failed");
+        Require(anyServer.GetBoundAddress() == "0.0.0.0", "explicit bind address was not preserved");
+        anyServer.Shutdown();
+        RequireDrained(anyServer.GetDiagnostics());
+
+        FakeChatService invalidService;
+        Server invalidServer(invalidService);
+        Require(!invalidServer.Init("not-an-ipv4-address", 0), "invalid bind address must be rejected");
+        invalidServer.Shutdown();
+        RequireDrained(invalidServer.GetDiagnostics());
+    }
+
+    void TestConfiguredLanAddressSupportsTwoWayChat()
+    {
+        const std::string address = Environment("CHAT_TEST_LAN_ADDRESS");
+        if (address.empty())
+        {
+            return;
+        }
+
+        FakeChatService service;
+        service.AddUser("lan_alice", "password");
+        service.AddUser("lan_bob", "password");
+        Server server(service);
+        Require(server.Init(address, 0), "LAN-address server init failed");
+
+        SOCKET alice = Connect(address, server.GetBoundPort());
+        SOCKET bob = Connect(address, server.GetBoundPort());
+        Login(alice, "lan_alice", 901);
+        Login(bob, "lan_bob", 902);
+
+        SendAll(alice, Encode({ MessageType::ChatSend, 903, { "alice-to-bob" } }));
+        const auto aliceFirst = ReceiveMessages(alice, 1);
+        const auto bobFirst = ReceiveMessages(bob, 1);
+        Require(aliceFirst[0].fields == std::vector<std::string>({ "lan_alice", "alice-to-bob" }),
+            "LAN origin did not receive its first delivery");
+        Require(bobFirst[0].fields == aliceFirst[0].fields, "LAN peer did not receive Alice's message");
+
+        SendAll(bob, Encode({ MessageType::ChatSend, 904, { "bob-to-alice" } }));
+        const auto aliceSecond = ReceiveMessages(alice, 1);
+        const auto bobSecond = ReceiveMessages(bob, 1);
+        Require(aliceSecond[0].fields == std::vector<std::string>({ "lan_bob", "bob-to-alice" }),
+            "LAN peer did not receive Bob's message");
+        Require(bobSecond[0].fields == aliceSecond[0].fields, "LAN origin did not receive its second delivery");
+
+        CloseSocket(alice);
+        CloseSocket(bob);
+        server.Shutdown();
+        RequireDrained(server.GetDiagnostics());
     }
 
     void TestFragmentedAndCoalescedFramesPreserveIdentityAndRequestIds()
@@ -807,6 +888,8 @@ int main()
     try
     {
         Run("default database queue supports planned burst", TestDefaultDatabaseQueueSupportsPlannedBurst);
+        Run("bind address configuration", TestBindAddressConfiguration);
+        Run("configured LAN address two-way chat", TestConfiguredLanAddressSupportsTwoWayChat);
         Run("preposted accepts and shutdown counters", TestPrepostedAcceptPoolAndShutdownCounters);
         Run("fragmented and coalesced real frames", TestFragmentedAndCoalescedFramesPreserveIdentityAndRequestIds);
         Run("persisted chat survives origin disconnect", TestPersistedChatReachesPeersAfterOriginDisconnects);
