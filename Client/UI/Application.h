@@ -16,6 +16,7 @@ public:
 private:
     void DrawLoginUI();
     void DrawChatUI();
+    void LogOut();
     void AddChatMessage(const std::string& sender, const std::string& message, bool isMine);
     bool SubmitCurrentMessage();
 
@@ -28,6 +29,7 @@ private:
     bool showRegisterPopup = false;
     char RegisterNickname[32] = {};
     char RegisterPassword[129] = {};
+    std::string registerValidationMessage;
     bool showRegisterResultPopup = false;
     std::string registerResultMessage;
     std::string ServerIp;

@@ -250,15 +250,26 @@ namespace
         Require(!reducer.IsLoggedIn(), "registration success logged the client in");
         Require(reducer.ChatCount() == 1, "registration success cleared chat history");
 
+        reducer.BeginLogin("alice");
         reducer.Apply({ PACKET_TYPE_LOGIN_SUCCESS, {}, "ignored text", false });
         Require(reducer.IsLoggedIn(), "login success did not log the client in");
         Require(reducer.ChatCount() == 0, "login success did not clear stale chat history");
 
         reducer.Apply({ PACKET_TYPE_CHAT, "alice", "history", false });
         Require(reducer.ChatCount() == 1, "history delivery was not appended");
+        Require(reducer.ChatMessages()[0].isMine, "restored own history was rendered as another user");
+        reducer.Apply({ PACKET_TYPE_CHAT, "bob", "peer history", false });
+        Require(!reducer.ChatMessages()[1].isMine, "peer history was rendered as the current user");
         reducer.Disconnect();
         Require(!reducer.IsLoggedIn(), "disconnect left the client logged in");
-        Require(reducer.ChatCount() == 1, "disconnect discarded visible chat before reconnect");
+        Require(reducer.ChatCount() == 2, "disconnect discarded visible chat before reconnect");
+
+        reducer.BeginLogin("bob");
+        reducer.Apply({ PACKET_TYPE_LOGIN_SUCCESS, {}, "ignored text", false });
+        reducer.Apply({ PACKET_TYPE_CHAT, "alice", "older history", false });
+        reducer.Apply({ PACKET_TYPE_CHAT, "bob", "new own history", false });
+        Require(!reducer.ChatMessages()[0].isMine, "previous account history stayed marked as mine after relogin");
+        Require(reducer.ChatMessages()[1].isMine, "relogged account history was not marked as mine");
     }
 
     void TestMissingDriverDiagnosticIsActionableAndPrivate()

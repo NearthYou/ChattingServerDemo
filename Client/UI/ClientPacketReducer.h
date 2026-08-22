@@ -16,6 +16,7 @@ struct ClientChatMessage
 class ClientPacketReducer
 {
 public:
+    void BeginLogin(const std::string& username);
     void Apply(const ChatPacket& packet);
     void AppendChat(const std::string& sender, const std::string& message, bool isMine);
     void Disconnect();
@@ -26,5 +27,7 @@ public:
 
 private:
     bool loggedIn = false;
+    std::string pendingUsername;
+    std::string currentUsername;
     std::vector<ClientChatMessage> chatMessages;
 };

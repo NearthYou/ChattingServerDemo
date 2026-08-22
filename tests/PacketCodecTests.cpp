@@ -1,5 +1,6 @@
 #include "../Common/Protocol/ChatProtocol.h"
 #include "../Client/UI/ChatMessageLayout.h"
+#include "../Client/UI/RegistrationValidation.h"
 #include "../Client/Network/NetworkPrimitives.h"
 
 #include <cstdint>
@@ -254,14 +255,28 @@ namespace
         const float longMessageX = chat::ui::RightAlignedMessageX(cursorX, availableWidth, 400.0f);
         CHECK(longMessageX == cursorX);
 
-        CHECK(chat::ui::MessageBubbleMaxWidth(300.0f) == 210.0f);
-        CHECK(chat::ui::MessageBubbleWidth(300.0f, 60.0f) == 120.0f);
-        CHECK(chat::ui::MessageBubbleWidth(300.0f, 500.0f) == 210.0f);
-        CHECK(chat::ui::MessageBubbleWidth(100.0f, 500.0f) == 100.0f);
+        CHECK(chat::ui::MessageBubbleMaxWidth(300.0f) == 195.0f);
+        CHECK(chat::ui::MessageBubbleWidth(300.0f, 20.0f) == 48.0f);
+        CHECK(chat::ui::MessageBubbleWidth(300.0f, 60.0f) == 84.0f);
+        CHECK(chat::ui::MessageBubbleWidth(300.0f, 500.0f) == 195.0f);
+        CHECK(chat::ui::MessageBubbleWidth(40.0f, 500.0f) == 40.0f);
         CHECK(chat::ui::MessageBubbleWidth(0.0f, 500.0f) == 0.0f);
         CHECK(chat::ui::ClampedOverlayExtent(430.0f, 900.0f) == 430.0f);
         CHECK(chat::ui::ClampedOverlayExtent(430.0f, 400.0f) == 376.0f);
         CHECK(chat::ui::ClampedOverlayExtent(430.0f, 10.0f) == 1.0f);
+    }
+
+    void RegistrationRulesExplainFailures()
+    {
+        CHECK(std::string(chat::ui::RegistrationValidationMessage("", "")) ==
+            "Nickname and password are required.");
+        CHECK(std::string(chat::ui::RegistrationValidationMessage("ab", "password")) ==
+            "Nickname must be 3-20 bytes. Korean nicknames can be 3-6 characters.");
+        CHECK(std::string(chat::ui::RegistrationValidationMessage("a b", "password")) ==
+            "Nickname cannot contain spaces or control characters.");
+        CHECK(std::string(chat::ui::RegistrationValidationMessage("alice", "short")) ==
+            "Password must be 8-128 bytes. Three Korean characters meet the minimum.");
+        CHECK(chat::ui::RegistrationValidationMessage("alice", "password") == nullptr);
     }
 }
 
@@ -279,6 +294,7 @@ int main()
     BoundedQueueRejectsOverflowWithoutReordering();
     PartialSendKeepsFrameOrder();
     OwnMessageAlignmentStaysInsideAvailableRegion();
+    RegistrationRulesExplainFailures();
     failures += RunNetworkManagerIntegrationTests();
 
     if (failures != 0)

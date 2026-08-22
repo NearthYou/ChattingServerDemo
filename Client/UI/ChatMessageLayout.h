@@ -14,8 +14,8 @@ namespace chat::ui
     constexpr float MessageBubbleMaxWidth(float availableWidth) noexcept
     {
         const float safeWidth = availableWidth > 0.0f ? availableWidth : 0.0f;
-        const float desiredWidth = safeWidth * 0.70f;
-        const float minimumWidth = safeWidth < 120.0f ? safeWidth : 120.0f;
+        const float desiredWidth = safeWidth * 0.65f;
+        const float minimumWidth = safeWidth < 48.0f ? safeWidth : 48.0f;
         return desiredWidth < minimumWidth
             ? minimumWidth
             : (desiredWidth > safeWidth ? safeWidth : desiredWidth);
@@ -24,9 +24,9 @@ namespace chat::ui
     constexpr float MessageBubbleWidth(float availableWidth, float contentWidth) noexcept
     {
         const float maximumWidth = MessageBubbleMaxWidth(availableWidth);
-        const float minimumWidth = maximumWidth < 120.0f ? maximumWidth : 120.0f;
+        const float minimumWidth = maximumWidth < 48.0f ? maximumWidth : 48.0f;
         const float safeContentWidth = contentWidth > 0.0f ? contentWidth : 0.0f;
-        const float desiredWidth = safeContentWidth + 32.0f;
+        const float desiredWidth = safeContentWidth + 24.0f;
         return desiredWidth < minimumWidth
             ? minimumWidth
             : (desiredWidth > maximumWidth ? maximumWidth : desiredWidth);
