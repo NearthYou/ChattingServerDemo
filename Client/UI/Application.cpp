@@ -7,6 +7,222 @@
 #include "../ImGui/imgui_impl_win32.h"
 #include "../ImGui/imgui_impl_dx11.h"
 
+#include <algorithm>
+
+namespace
+{
+constexpr ImU32 AccentColor = IM_COL32(109, 94, 252, 255);
+constexpr ImU32 AccentHoverColor = IM_COL32(128, 113, 255, 255);
+constexpr ImU32 SuccessColor = IM_COL32(52, 211, 153, 255);
+constexpr ImU32 MutedTextColor = IM_COL32(150, 160, 181, 255);
+constexpr ImU32 PanelColor = IM_COL32(20, 24, 36, 248);
+constexpr ImU32 PanelBorderColor = IM_COL32(255, 255, 255, 25);
+
+struct ChatFonts
+{
+    ImFont* Body = nullptr;
+    ImFont* Label = nullptr;
+    ImFont* Heading = nullptr;
+    ImFont* Display = nullptr;
+};
+
+ChatFonts gChatFonts;
+
+ImFont* AddFontFromFileIfPresent(
+    ImGuiIO& io,
+    const char* path,
+    float size,
+    ImFontConfig* config,
+    const ImWchar* ranges = nullptr)
+{
+    const DWORD attributes = GetFileAttributesA(path);
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        return nullptr;
+    return io.Fonts->AddFontFromFileTTF(path, size, config, ranges);
+}
+
+ChatFonts LoadChatFonts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    ImFontConfig config;
+    config.OversampleH = 3;
+    config.OversampleV = 2;
+    config.PixelSnapH = false;
+    const ImWchar* koreanRanges = io.Fonts->GetGlyphRangesKorean();
+
+    ChatFonts fonts;
+    fonts.Body = AddFontFromFileIfPresent(io,
+        "C:\\Windows\\Fonts\\malgun.ttf", 17.0f, &config, koreanRanges);
+    if (!fonts.Body)
+        fonts.Body = AddFontFromFileIfPresent(io,
+            "C:\\Windows\\Fonts\\gulim.ttc", 17.0f, &config, koreanRanges);
+    fonts.Label = AddFontFromFileIfPresent(io,
+        "C:\\Windows\\Fonts\\seguisb.ttf", 15.0f, &config);
+    fonts.Heading = AddFontFromFileIfPresent(io,
+        "C:\\Windows\\Fonts\\malgunbd.ttf", 27.0f, &config, koreanRanges);
+    fonts.Display = AddFontFromFileIfPresent(io,
+        "C:\\Windows\\Fonts\\seguisb.ttf", 38.0f, &config);
+
+    if (!fonts.Body)
+        fonts.Body = AddFontFromFileIfPresent(io,
+            "C:\\Windows\\Fonts\\segoeui.ttf", 17.0f, &config);
+    if (!fonts.Body) fonts.Body = io.Fonts->AddFontDefault();
+    if (!fonts.Label) fonts.Label = fonts.Body;
+    if (!fonts.Heading) fonts.Heading = fonts.Body;
+    if (!fonts.Display) fonts.Display = fonts.Heading;
+    io.FontDefault = fonts.Body;
+    return fonts;
+}
+
+void ApplyChatStyle()
+{
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 20.0f;
+    style.ChildRounding = 16.0f;
+    style.FrameRounding = 11.0f;
+    style.PopupRounding = 18.0f;
+    style.ScrollbarRounding = 10.0f;
+    style.GrabRounding = 10.0f;
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.WindowPadding = ImVec2(28.0f, 26.0f);
+    style.FramePadding = ImVec2(14.0f, 11.0f);
+    style.ItemSpacing = ImVec2(12.0f, 12.0f);
+    style.DisabledAlpha = 0.42f;
+
+    style.Colors[ImGuiCol_Text] = ImVec4(0.95f, 0.96f, 0.99f, 1.0f);
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.59f, 0.63f, 0.71f, 1.0f);
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.09f, 0.135f, 0.98f);
+    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.065f, 0.075f, 0.11f, 0.96f);
+    style.Colors[ImGuiCol_PopupBg] = ImVec4(0.075f, 0.09f, 0.135f, 0.99f);
+    style.Colors[ImGuiCol_Border] = ImVec4(1.0f, 1.0f, 1.0f, 0.10f);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.11f, 0.13f, 0.19f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.15f, 0.17f, 0.24f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.18f, 0.20f, 0.28f, 1.0f);
+    style.Colors[ImGuiCol_Button] = ImGui::ColorConvertU32ToFloat4(AccentColor);
+    style.Colors[ImGuiCol_ButtonHovered] = ImGui::ColorConvertU32ToFloat4(AccentHoverColor);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.36f, 0.30f, 0.86f, 1.0f);
+    style.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.04f, 0.05f, 0.08f, 0.6f);
+    style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.26f, 0.28f, 0.38f, 1.0f);
+    style.Colors[ImGuiCol_Separator] = ImVec4(1.0f, 1.0f, 1.0f, 0.08f);
+}
+
+void DrawAppBackground()
+{
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    drawList->AddRectFilledMultiColor(
+        ImVec2(0.0f, 0.0f), size,
+        IM_COL32(14, 17, 28, 255),
+        IM_COL32(20, 17, 39, 255),
+        IM_COL32(9, 13, 23, 255),
+        IM_COL32(9, 15, 25, 255));
+    drawList->AddCircleFilled(ImVec2(size.x * 0.78f, size.y * 0.12f), 210.0f, IM_COL32(109, 94, 252, 22), 64);
+    drawList->AddCircleFilled(ImVec2(size.x * 0.20f, size.y * 0.92f), 260.0f, IM_COL32(41, 198, 172, 14), 64);
+}
+
+void CenterNextItem(float width)
+{
+    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), (ImGui::GetWindowWidth() - width) * 0.5f));
+}
+
+void CenteredText(const char* text, ImFont* font, ImU32 color)
+{
+    ImGui::PushFont(font ? font : ImGui::GetFont());
+    CenterNextItem(ImGui::CalcTextSize(text).x);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(color), "%s", text);
+    ImGui::PopFont();
+}
+
+bool PrimaryButton(const char* label, ImVec2 size)
+{
+    ImGui::PushFont(gChatFonts.Label);
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::PopFont();
+    return pressed;
+}
+
+bool SecondaryButton(const char* label, ImVec2 size)
+{
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.14f, 0.21f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.17f, 0.19f, 0.27f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.21f, 0.23f, 0.32f, 1.0f));
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleColor(3);
+    ImGui::PopFont();
+    return pressed;
+}
+
+void DrawConnectionCard(const std::string& status, const std::string& ip, int port, bool connected, bool connecting)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.095f, 0.11f, 0.16f, 1.0f));
+    ImGui::BeginChild("ConnectionCard", ImVec2(-1.0f, 92.0f), true, ImGuiWindowFlags_NoScrollbar);
+    const ImU32 indicatorColor = connected ? SuccessColor : (connecting ? IM_COL32(250, 184, 74, 255) : IM_COL32(248, 113, 113, 255));
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 indicator(ImGui::GetWindowPos().x + 19.0f, ImGui::GetWindowPos().y + 24.0f);
+    drawList->AddCircleFilled(indicator, 5.0f, indicatorColor, 20);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 17.0f);
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextUnformatted(connected ? "ONLINE" : (connecting ? "CONNECTING" : "OFFLINE"));
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "  %s:%d", ip.c_str(), port);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 17.0f);
+    ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - 14.0f);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "%s", status.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+void DrawMessageBubble(const ClientChatMessage& message, int index, float contentStartX, float availableWidth)
+{
+    ImGui::PushID(index);
+    const char* senderLabel = message.isMine ? "YOU" : message.sender.c_str();
+    const float maxBubbleWidth = chat::ui::MessageBubbleMaxWidth(availableWidth);
+    const float wrapWidth = (std::max)(1.0f, maxBubbleWidth - 32.0f);
+    ImGui::PushFont(gChatFonts.Body);
+    const ImVec2 textSize = ImGui::CalcTextSize(message.text.c_str(), nullptr, false, wrapWidth);
+    ImGui::PopFont();
+    ImGui::PushFont(gChatFonts.Body);
+    const float senderWidth = ImGui::CalcTextSize(senderLabel).x;
+    const float labelHeight = ImGui::GetTextLineHeight();
+    ImGui::PopFont();
+
+    const float bubbleWidth = chat::ui::MessageBubbleWidth(
+        availableWidth, (std::max)(textSize.x, senderWidth));
+    const float bubbleHeight = 14.0f + labelHeight + 5.0f + textSize.y + 15.0f;
+    const float bubbleX = message.isMine
+        ? chat::ui::RightAlignedMessageX(contentStartX, availableWidth, bubbleWidth)
+        : contentStartX;
+    ImGui::SetCursorPosX(bubbleX);
+    ImGui::Dummy(ImVec2(bubbleWidth, bubbleHeight));
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 bubbleMin = ImGui::GetItemRectMin();
+    const ImVec2 bubbleMax = ImGui::GetItemRectMax();
+    const ImU32 bubbleColor = message.isMine ? IM_COL32(96, 81, 226, 245) : IM_COL32(38, 43, 59, 250);
+    drawList->AddRectFilled(bubbleMin, bubbleMax, bubbleColor, 16.0f);
+    drawList->AddRect(bubbleMin, bubbleMax, message.isMine ? IM_COL32(157, 145, 255, 95) : PanelBorderColor, 16.0f, 0, 1.0f);
+    const ImVec4 senderClip(
+        bubbleMin.x + 16.0f,
+        bubbleMin.y + 8.0f,
+        bubbleMax.x - 16.0f,
+        bubbleMin.y + 14.0f + labelHeight);
+    drawList->AddText(gChatFonts.Body, 14.0f,
+        ImVec2(bubbleMin.x + 16.0f, bubbleMin.y + 12.0f),
+        message.isMine ? IM_COL32(222, 218, 255, 255) : IM_COL32(135, 224, 207, 255),
+        senderLabel, nullptr, 0.0f, &senderClip);
+    drawList->AddText(gChatFonts.Body, gChatFonts.Body->FontSize,
+        ImVec2(bubbleMin.x + 16.0f, bubbleMin.y + 17.0f + labelHeight),
+        IM_COL32(247, 248, 252, 255), message.text.c_str(), nullptr, wrapWidth);
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::PopID();
+}
+}
+
 bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
 {
     ServerIp = ip;
@@ -25,6 +241,9 @@ bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
     UpdateWindow(hWnd);
 
     ImGuiUI.Init(hWnd, D3D.GetDevice(), D3D.GetDeviceContext());
+    ImGui::GetIO().IniFilename = nullptr;
+    gChatFonts = LoadChatFonts();
+    ApplyChatStyle();
 
     if (Network.BeginConnect(ServerIp, ServerPort))
     {
@@ -56,6 +275,7 @@ int Application::Run()
 
         D3D.BeginFrame();
         ImGuiUI.BeginFrame();
+        DrawAppBackground();
 
         if (!ClientState.IsLoggedIn())
             DrawLoginUI();
@@ -132,11 +352,25 @@ void Application::Shutdown()
 
 void Application::DrawLoginUI()
 {
-    ImGui::Begin("Login", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::TextUnformatted(ConnectionStatus.c_str());
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings;
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    const float cardWidth = (std::max)(1.0f, (std::min)(500.0f, displaySize.x - 32.0f));
+    const float cardHeight = (std::max)(1.0f, (std::min)(630.0f, displaySize.y - 28.0f));
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(cardWidth, cardHeight), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(PanelColor));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(PanelBorderColor));
+    ImGui::Begin("Login", nullptr, windowFlags);
+
+    CenteredText("RELAY", gChatFonts.Display, AccentColor);
+    CenteredText("A focused real-time chat client", gChatFonts.Body, MutedTextColor);
+    ImGui::Dummy(ImVec2(0.0f, 12.0f));
+    DrawConnectionCard(ConnectionStatus, ServerIp, ServerPort, Network.IsConnected(), Network.IsConnecting());
+
     if (!Network.IsConnected() && !Network.IsConnecting())
     {
-        if (ImGui::Button("Reconnect"))
+        if (SecondaryButton("Reconnect to server", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
         {
             if (Network.BeginConnect(ServerIp, ServerPort))
             {
@@ -147,12 +381,23 @@ void Application::DrawLoginUI()
                 ConnectionStatus = "Reconnect failed. Check the server and try again.";
             }
         }
-        ImGui::Separator();
     }
-    ImGui::InputText("Nickname", Nickname, IM_ARRAYSIZE(Nickname));
-    ImGui::InputText("Password", LoginPassword, IM_ARRAYSIZE(LoginPassword), ImGuiInputTextFlags_Password);
 
-    if (Network.IsConnected() && ImGui::Button("Login"))
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "NICKNAME");
+    ImGui::PopFont();
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##LoginNickname", "Enter your nickname", Nickname, IM_ARRAYSIZE(Nickname));
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "PASSWORD");
+    ImGui::PopFont();
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##LoginPassword", "Enter your password", LoginPassword,
+        IM_ARRAYSIZE(LoginPassword), ImGuiInputTextFlags_Password);
+
+    ImGui::BeginDisabled(!Network.IsConnected());
+    if (PrimaryButton("Sign in", ImVec2(ImGui::GetContentRegionAvail().x, 48.0f)))
     {
         if (strlen(Nickname) > 0 && strlen(LoginPassword) > 0)
         {
@@ -164,25 +409,37 @@ void Application::DrawLoginUI()
             }
         }
     }
-    ImGui::SameLine();
-    if (Network.IsConnected() && ImGui::Button("Register"))
+    if (SecondaryButton("Create account", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
     {
         showRegisterPopup = true;
         RegisterNickname[0] = 0;
         RegisterPassword[0] = 0;
     }
+    ImGui::EndDisabled();
+    CenteredText("Password is cleared after the request is queued", gChatFonts.Label, MutedTextColor);
 
-    // 회원가입 팝업
     if (showRegisterPopup)
     {
         ImGui::OpenPopup("Register");
         showRegisterPopup = false;
     }
-    if (ImGui::BeginPopupModal("Register", NULL, ImGuiWindowFlags_AlwaysAutoResize))
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(
+        chat::ui::ClampedOverlayExtent(430.0f, displaySize.x),
+        chat::ui::ClampedOverlayExtent(350.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Register", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::InputText("Nickname", RegisterNickname, IM_ARRAYSIZE(RegisterNickname));
-        ImGui::InputText("Password", RegisterPassword, IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
-        if (ImGui::Button("Register"))
+        ImGui::PushFont(gChatFonts.Heading);
+        ImGui::TextUnformatted("Create account");
+        ImGui::PopFont();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Choose credentials for this chat server.");
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##RegisterNickname", "Nickname", RegisterNickname, IM_ARRAYSIZE(RegisterNickname));
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##RegisterPassword", "Password", RegisterPassword,
+            IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
+        if (PrimaryButton("Register", ImVec2(ImGui::GetContentRegionAvail().x, 46.0f)))
         {
             if (strlen(RegisterNickname) == 0 || strlen(RegisterPassword) == 0)
             {
@@ -197,8 +454,7 @@ void Application::DrawLoginUI()
             SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel"))
+        if (SecondaryButton("Cancel", ImVec2(ImGui::GetContentRegionAvail().x, 42.0f)))
         {
             SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             ImGui::CloseCurrentPopup();
@@ -206,30 +462,44 @@ void Application::DrawLoginUI()
         ImGui::EndPopup();
     }
 
-    // 로그인 실패 팝업
     if (showLoginFailedPopup)
         ImGui::OpenPopup("Login Failed");
 
-    if (ImGui::BeginPopupModal("Login Failed", NULL, ImGuiWindowFlags_AlwaysAutoResize))
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(
+        chat::ui::ClampedOverlayExtent(390.0f, displaySize.x),
+        chat::ui::ClampedOverlayExtent(215.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Login Failed", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::Text("Login/Register failed. Please try again.");
-        if (ImGui::Button("OK")) {
+        ImGui::PushFont(gChatFonts.Heading);
+        ImGui::TextUnformatted("Unable to sign in");
+        ImGui::PopFont();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Check your credentials and try again.");
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
+        if (PrimaryButton("Try again", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f))) {
             ImGui::CloseCurrentPopup();
             showLoginFailedPopup = false;
         }
         ImGui::EndPopup();
     }
 
-    // 회원가입 결과 팝업
     if (showRegisterResultPopup)
     {
         ImGui::OpenPopup("Register Result");
         showRegisterResultPopup = false;
     }
-    if (ImGui::BeginPopupModal("Register Result", NULL, ImGuiWindowFlags_AlwaysAutoResize))
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(
+        chat::ui::ClampedOverlayExtent(390.0f, displaySize.x),
+        chat::ui::ClampedOverlayExtent(215.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Register Result", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::Text("%s", registerResultMessage.c_str());
-        if (ImGui::Button("OK"))
+        ImGui::PushFont(gChatFonts.Heading);
+        ImGui::TextUnformatted("Registration");
+        ImGui::PopFont();
+        ImGui::TextWrapped("%s", registerResultMessage.c_str());
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
+        if (PrimaryButton("Continue", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
         {
             ImGui::CloseCurrentPopup();
         }
@@ -237,51 +507,84 @@ void Application::DrawLoginUI()
     }
 
     ImGui::End();
+    ImGui::PopStyleColor(2);
 }
 
 void Application::DrawChatUI()
 {
-    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Chat Room", nullptr, ImGuiWindowFlags_NoCollapse);
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(displaySize, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.08f, 1.0f));
+    ImGui::Begin("Chat Room", nullptr, windowFlags);
 
     static bool AutoScroll = true;
     static bool ScrollToBottom = false;
 
-    ImGui::BeginChild("ChatLog", ImVec2(0, -50), true,
-        ImGuiWindowFlags_HorizontalScrollbar |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoNavInputs |
-        ImGuiWindowFlags_NoScrollWithMouse
-    );
+    const float sidebarWidth = (std::min)(
+        std::clamp(displaySize.x * 0.27f, 180.0f, 260.0f),
+        displaySize.x * 0.42f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 24.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.055f, 0.065f, 0.105f, 1.0f));
+    ImGui::BeginChild("Sidebar", ImVec2(sidebarWidth, 0.0f), false, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushFont(gChatFonts.Heading);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(AccentColor), "RELAY");
+    ImGui::PopFont();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "REAL-TIME CHAT");
+    ImGui::Dummy(ImVec2(0.0f, 28.0f));
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "SIGNED IN AS");
+    ImGui::PopFont();
+    ImGui::PushFont(gChatFonts.Heading);
+    ImGui::TextWrapped("%s", Nickname);
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0.0f, 18.0f));
+    DrawConnectionCard(ConnectionStatus, ServerIp, ServerPort, Network.IsConnected(), Network.IsConnecting());
+    ImGui::Dummy(ImVec2(0.0f, 18.0f));
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "ROOM");
+    ImGui::PopFont();
+    ImGui::TextUnformatted("General");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "%zu messages loaded", ClientState.ChatCount());
+    ImGui::SetCursorPosY((std::max)(ImGui::GetCursorPosY(), ImGui::GetWindowHeight() - 62.0f));
+    ImGui::Separator();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "IOCP server  |  TCP client");
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::SameLine(0.0f, 0.0f);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30.0f, 24.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.075f, 0.085f, 0.125f, 1.0f));
+    ImGui::BeginChild("Conversation", ImVec2(0.0f, 0.0f), false);
+    ImGui::PushFont(gChatFonts.Heading);
+    ImGui::TextUnformatted("General chat");
+    ImGui::PopFont();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Live messages and restored recent history");
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.055f, 0.065f, 0.095f, 0.72f));
+    ImGui::BeginChild("ChatLog", ImVec2(0.0f, -78.0f), false,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNavInputs);
 
     const float contentStartX = ImGui::GetCursorPosX();
     const float availableWidth = ImGui::GetContentRegionAvail().x;
-    const float contentRightX = contentStartX + availableWidth;
-
+    if (ClientState.ChatMessages().empty())
+    {
+        ImGui::Dummy(ImVec2(0.0f, 36.0f));
+        CenteredText("No messages yet", gChatFonts.Heading, MutedTextColor);
+        CenteredText("Start the conversation below.", gChatFonts.Body, MutedTextColor);
+    }
+    int messageIndex = 0;
     for (const auto& msg : ClientState.ChatMessages())
     {
-        const std::string displayText = msg.isMine
-            ? "[Me] " + msg.text
-            : "[" + msg.sender + "] " + msg.text;
-
-        ImGui::SetCursorPosX(contentStartX);
-        if (msg.isMine)
-        {
-            const float textWidth = ImGui::CalcTextSize(displayText.c_str()).x;
-            ImGui::SetCursorPosX(chat::ui::RightAlignedMessageX(
-                contentStartX,
-                availableWidth,
-                textWidth));
-            ImGui::PushTextWrapPos(contentRightX);
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s", displayText.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        else
-        {
-            ImGui::PushTextWrapPos(contentRightX);
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "%s", displayText.c_str());
-            ImGui::PopTextWrapPos();
-        }
+        DrawMessageBubble(msg, messageIndex++, contentStartX, availableWidth);
     }
 
     if (AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
@@ -293,9 +596,11 @@ void Application::DrawChatUI()
     ScrollToBottom = false;
 
     ImGui::EndChild();
+    ImGui::PopStyleColor();
 
-    ImGui::PushItemWidth(-70);
-    if (ImGui::InputText("##Input", InputBuffer, IM_ARRAYSIZE(InputBuffer),
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::PushItemWidth(-108.0f);
+    if (ImGui::InputTextWithHint("##Input", "Write a message...", InputBuffer, IM_ARRAYSIZE(InputBuffer),
         ImGuiInputTextFlags_EnterReturnsTrue))
     {
         if (SubmitCurrentMessage())
@@ -306,7 +611,7 @@ void Application::DrawChatUI()
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
-    if (ImGui::Button("Send"))
+    if (PrimaryButton("Send", ImVec2(96.0f, 42.0f)))
     {
         if (SubmitCurrentMessage())
         {
@@ -314,7 +619,12 @@ void Application::DrawChatUI()
         }
     }
 
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
     ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 bool Application::SubmitCurrentMessage()
@@ -344,6 +654,13 @@ LRESULT WINAPI Application::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     if (msg == WM_DESTROY)
     {
         PostQuitMessage(0);
+        return 0;
+    }
+    if (msg == WM_GETMINMAXINFO)
+    {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+        limits->ptMinTrackSize.x = 720;
+        limits->ptMinTrackSize.y = 560;
         return 0;
     }
     return DefWindowProc(hWnd, msg, wParam, lParam);

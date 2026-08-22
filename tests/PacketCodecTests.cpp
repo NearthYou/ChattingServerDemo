@@ -253,6 +253,15 @@ namespace
 
         const float longMessageX = chat::ui::RightAlignedMessageX(cursorX, availableWidth, 400.0f);
         CHECK(longMessageX == cursorX);
+
+        CHECK(chat::ui::MessageBubbleMaxWidth(300.0f) == 210.0f);
+        CHECK(chat::ui::MessageBubbleWidth(300.0f, 60.0f) == 120.0f);
+        CHECK(chat::ui::MessageBubbleWidth(300.0f, 500.0f) == 210.0f);
+        CHECK(chat::ui::MessageBubbleWidth(100.0f, 500.0f) == 100.0f);
+        CHECK(chat::ui::MessageBubbleWidth(0.0f, 500.0f) == 0.0f);
+        CHECK(chat::ui::ClampedOverlayExtent(430.0f, 900.0f) == 430.0f);
+        CHECK(chat::ui::ClampedOverlayExtent(430.0f, 400.0f) == 376.0f);
+        CHECK(chat::ui::ClampedOverlayExtent(430.0f, 10.0f) == 1.0f);
     }
 }
 
