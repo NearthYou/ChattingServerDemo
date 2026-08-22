@@ -18,7 +18,7 @@ services:
       - chat_mysql_data:/var/lib/mysql
       - ./Server/Database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping --silent -h 127.0.0.1 -u root -p\"$${MYSQL_ROOT_PASSWORD}\""]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_PASSWORD}\" mysql --protocol=TCP -h 127.0.0.1 -u \"$${MYSQL_USER}\" \"$${MYSQL_DATABASE}\" -N -e \"SELECT 1\""]
       interval: 3s
       timeout: 3s
       retries: 30

@@ -180,7 +180,9 @@ try {
     do {
         $health = (@(& docker inspect --format '{{.State.Health.Status}}' $containerId 2>$null) -join '').Trim()
         if ($health -eq 'healthy') { break }
-        if ($health -eq 'unhealthy') { throw 'The MySQL container became unhealthy.' }
+        if ($health -eq 'unhealthy') {
+            throw 'MySQL authentication health check failed. The current .env.local may not match the preserved MySQL volume.'
+        }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($health -ne 'healthy') { throw 'Timed out waiting for MySQL health.' }
@@ -221,7 +223,12 @@ try {
         Remove-Item -LiteralPath $runFile -Force
     }
     if (Test-ShouldStopComposeOnStartupFailure -MysqlWasRunningBeforeStartup $mysqlWasRunningBeforeStartup) {
-        & docker compose --env-file $envFile -f $composeFile down 2>$null | Out-Null
+        $rollbackExitCode = Invoke-NativeCommandForExitCode -Command {
+            & docker compose --env-file $envFile -f $composeFile down
+        }
+        if ($rollbackExitCode -ne 0) {
+            Write-Warning "Docker Compose rollback failed with exit code $rollbackExitCode."
+        }
     }
     throw $startupFailure
 } finally {

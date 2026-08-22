@@ -22,7 +22,27 @@ if (Test-ShouldStopComposeOnStartupFailure -MysqlWasRunningBeforeStartup $true) 
     throw 'Preexisting running MySQL would be composed down during rollback.'
 }
 
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Stop'
+    $successfulNativeExit = Invoke-NativeCommandForExitCode -Command {
+        & $env:ComSpec /d /c 'echo native-status 1>&2 & exit /b 0'
+    }
+    if ($successfulNativeExit -ne 0) {
+        throw 'Native stderr changed a successful exit code.'
+    }
+    $failingNativeExit = Invoke-NativeCommandForExitCode -Command {
+        & $env:ComSpec /d /c 'exit /b 7'
+    }
+    if ($failingNativeExit -ne 7) {
+        throw 'Native failure exit code was not preserved.'
+    }
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+
 $startScriptText = Get-Content -LiteralPath (Join-Path $root 'scripts\Start-ChatService.ps1') -Raw -Encoding utf8
+$stopScriptText = Get-Content -LiteralPath (Join-Path $root 'scripts\Stop-ChatService.ps1') -Raw -Encoding utf8
 $preexistingProbe = $startScriptText.IndexOf('ps --status running -q mysql', [StringComparison]::Ordinal)
 $composeUp = $startScriptText.IndexOf('up -d', [StringComparison]::Ordinal)
 if ($preexistingProbe -lt 0 -or $composeUp -lt 0 -or $preexistingProbe -gt $composeUp) {
@@ -30,6 +50,13 @@ if ($preexistingProbe -lt 0 -or $composeUp -lt 0 -or $preexistingProbe -gt $comp
 }
 if ($startScriptText -notmatch 'Test-ShouldStopComposeOnStartupFailure\s+-MysqlWasRunningBeforeStartup\s+\$mysqlWasRunningBeforeStartup') {
     throw 'Start script rollback does not use the recorded MySQL state.'
+}
+if ($startScriptText -notmatch 'authentication health check failed' -or
+    $startScriptText -notmatch 'Invoke-NativeCommandForExitCode') {
+    throw 'Start script does not preserve native exit codes or diagnose stale database credentials.'
+}
+if ($stopScriptText -notmatch 'Invoke-NativeCommandForExitCode') {
+    throw 'Stop script does not preserve the Docker Compose exit code.'
 }
 if ($startScriptText -notmatch '\[string\]\$BindAddress\s*=\s*''127\.0\.0\.1''' -or
     $startScriptText -notmatch '''--bind-address''' -or
@@ -64,8 +91,10 @@ try {
     $rendered = $configuration -join "`n"
     if ($rendered -notmatch 'mysql:8\.4' -or
         $rendered -notmatch '127\.0\.0\.1' -or
-        $rendered -notmatch 'schema\.sql') {
-        throw 'Rendered Compose configuration lost its image, loopback binding, or schema mount.'
+        $rendered -notmatch 'schema\.sql' -or
+        $rendered -notmatch 'MYSQL_PWD' -or
+        $rendered -notmatch 'SELECT 1') {
+        throw 'Rendered Compose configuration lost its image, binding, schema, or authenticated health check.'
     }
 } finally {
     if ($createdEnvironment -and (Test-Path -LiteralPath $localEnvironment)) {

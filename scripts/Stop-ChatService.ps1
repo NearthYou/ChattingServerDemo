@@ -9,6 +9,7 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $composeFile = Join-Path $root 'docker-compose.yml'
 $envFile = Join-Path $root '.env.local'
 $runFile = Join-Path $root '.run\server.json'
+. (Join-Path $PSScriptRoot 'ChatServiceLifecycle.ps1')
 
 if (Test-Path -LiteralPath $runFile -PathType Leaf) {
     $record = Get-Content -LiteralPath $runFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -47,8 +48,10 @@ if (Test-Path -LiteralPath $runFile -PathType Leaf) {
 if (Test-Path -LiteralPath $envFile -PathType Leaf) {
     Push-Location $root
     try {
-        & docker compose --env-file $envFile -f $composeFile down
-        if ($LASTEXITCODE -ne 0) { throw 'docker compose down failed.' }
+        $downExitCode = Invoke-NativeCommandForExitCode -Command {
+            & docker compose --env-file $envFile -f $composeFile down
+        }
+        if ($downExitCode -ne 0) { throw "docker compose down failed with exit code $downExitCode." }
     } finally {
         Pop-Location
     }
