@@ -19,7 +19,8 @@ void ClientPacketReducer::Apply(const ChatPacket& packet)
         AppendChat(
             packet.sender,
             packet.message,
-            packet.isMine || (!currentUsername.empty() && packet.sender == currentUsername));
+            packet.isMine || (!currentUsername.empty() && packet.sender == currentUsername),
+            packet.timestampMilliseconds);
         break;
     case PACKET_TYPE_LOGIN:
     case PACKET_TYPE_REGISTER:
@@ -35,9 +36,10 @@ void ClientPacketReducer::Apply(const ChatPacket& packet)
 void ClientPacketReducer::AppendChat(
     const std::string& sender,
     const std::string& message,
-    bool isMine)
+    bool isMine,
+    std::int64_t timestampMilliseconds)
 {
-    chatMessages.push_back({ sender, message, isMine });
+    chatMessages.push_back({ sender, message, isMine, timestampMilliseconds });
 }
 
 void ClientPacketReducer::Disconnect()

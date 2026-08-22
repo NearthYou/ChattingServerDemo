@@ -91,7 +91,7 @@ namespace
 
         std::vector<std::uint8_t> bytes;
         AppendUint32(bytes, payloadBytes);
-        AppendUint16(bytes, 1);
+        AppendUint16(bytes, 2);
         AppendUint16(bytes, messageType);
         AppendUint32(bytes, requestId);
         for (const auto& field : fields)
@@ -260,7 +260,7 @@ namespace
         const std::string username = readField();
         const std::string password = readField();
         result.loginFrameValid =
-            ReadUint16(header.data() + 4) == 1 &&
+            ReadUint16(header.data() + 4) == 2 &&
             ReadUint16(header.data() + 6) == 1 &&
             requestId != 0 &&
             username == "alice" &&
@@ -286,7 +286,7 @@ namespace
             return;
         }
 
-        auto coalesced = BuildFrame(8, 0, { "bob", "hello" });
+        auto coalesced = BuildFrame(8, 0, { "bob", "hello", "1763856060456" });
         const auto registerFailed = BuildFrame(7, 77, {});
         coalesced.insert(coalesced.end(), registerFailed.begin(), registerFailed.end());
         result.responsesSent = SendAll(peer, coalesced.data(), coalesced.size());
@@ -467,6 +467,7 @@ namespace
             CHECK(packets[1].sender == "bob");
             CHECK(packets[1].message == "hello");
             CHECK(!packets[1].isMine);
+            CHECK(packets[1].timestampMilliseconds == 1763856060456LL);
             CHECK(packets[2].type == PACKET_TYPE_REGISTER_FAILED);
             CHECK(packets[2].message == "Login/Register failed");
         }
@@ -518,7 +519,8 @@ namespace
             [&](const ChatPacket& packet) {
                 return packet.type == PACKET_TYPE_CHAT &&
                        packet.sender == sender &&
-                       packet.message == message;
+                       packet.message == message &&
+                       packet.timestampMilliseconds > 0;
             });
     }
 

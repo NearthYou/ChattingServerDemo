@@ -3,6 +3,7 @@
 
 #include "Application.h"
 #include "ChatMessageLayout.h"
+#include "ChatTimeline.h"
 #include "RegistrationValidation.h"
 #include "../ImGui/imgui.h"
 #include "../ImGui/imgui_impl_win32.h"
@@ -178,7 +179,39 @@ void DrawConnectionCard(const std::string& status, const std::string& ip, int po
     ImGui::PopStyleColor();
 }
 
-void DrawMessageBubble(const ClientChatMessage& message, int index, float contentStartX, float availableWidth)
+void DrawDateSeparator(
+    const std::string& label,
+    float contentStartX,
+    float availableWidth)
+{
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    ImGui::PushFont(gChatFonts.Label);
+    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+    ImGui::PopFont();
+    const float textX = contentStartX + (availableWidth - textSize.x) * 0.5f;
+    const float lineY = ImGui::GetCursorScreenPos().y + textSize.y * 0.5f;
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddLine(
+        ImVec2(contentStartX, lineY),
+        ImVec2((std::max)(contentStartX, textX - 14.0f), lineY),
+        IM_COL32(255, 255, 255, 24));
+    drawList->AddLine(
+        ImVec2(textX + textSize.x + 14.0f, lineY),
+        ImVec2(contentStartX + availableWidth, lineY),
+        IM_COL32(255, 255, 255, 24));
+    ImGui::SetCursorPosX(textX);
+    ImGui::PushFont(gChatFonts.Label);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "%s", label.c_str());
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+}
+
+void DrawMessageBubble(
+    const ClientChatMessage& message,
+    int index,
+    float contentStartX,
+    float availableWidth,
+    const std::string& clockText)
 {
     ImGui::PushID(index);
     const float maxBubbleWidth = chat::ui::MessageBubbleMaxWidth(availableWidth);
@@ -230,6 +263,21 @@ void DrawMessageBubble(const ClientChatMessage& message, int index, float conten
     drawList->AddText(gChatFonts.Body, gChatFonts.Body->FontSize,
         ImVec2(bubbleMin.x + 12.0f, bubbleMin.y + 10.0f),
         IM_COL32(247, 248, 252, 255), message.text.c_str(), nullptr, wrapWidth);
+    if (!clockText.empty())
+    {
+        ImGui::PushFont(gChatFonts.Label);
+        const float clockWidth = ImGui::CalcTextSize(clockText.c_str()).x;
+        ImGui::PopFont();
+        const float clockX = message.isMine
+            ? bubbleMin.x - 8.0f - clockWidth
+            : bubbleMax.x + 8.0f;
+        drawList->AddText(
+            gChatFonts.Label,
+            13.0f,
+            ImVec2(clockX, bubbleMax.y - 15.0f),
+            MutedTextColor,
+            clockText.c_str());
+    }
     ImGui::Dummy(ImVec2(0.0f, 6.0f));
     ImGui::PopID();
 }
@@ -596,9 +644,27 @@ void Application::DrawChatUI()
         CenteredText("Start the conversation below.", gChatFonts.Body, MutedTextColor);
     }
     int messageIndex = 0;
+    bool hasPreviousDate = false;
+    chat::ui::LocalChatTime previousDate{};
     for (const auto& msg : ClientState.ChatMessages())
     {
-        DrawMessageBubble(msg, messageIndex++, contentStartX, availableWidth);
+        chat::ui::LocalChatTime localTime{};
+        std::string clockText;
+        if (msg.timestampMilliseconds > 0 &&
+            chat::ui::TryGetLocalChatTime(msg.timestampMilliseconds, localTime))
+        {
+            if (!hasPreviousDate || !chat::ui::IsSameChatDate(previousDate, localTime))
+            {
+                DrawDateSeparator(
+                    chat::ui::FormatChatDate(localTime),
+                    contentStartX,
+                    availableWidth);
+                previousDate = localTime;
+                hasPreviousDate = true;
+            }
+            clockText = chat::ui::FormatChatClock(localTime);
+        }
+        DrawMessageBubble(msg, messageIndex++, contentStartX, availableWidth, clockText);
     }
 
     if (AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())

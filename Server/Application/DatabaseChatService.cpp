@@ -122,7 +122,11 @@ LoginResult DatabaseChatService::Login(
     result.history.reserve(history.messages.size());
     for (const auto& message : history.messages)
     {
-        result.history.push_back({ message.username, message.message });
+        result.history.push_back({
+            message.username,
+            message.message,
+            message.timestampMilliseconds
+        });
     }
     return result;
 }

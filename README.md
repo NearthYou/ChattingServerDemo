@@ -99,7 +99,7 @@ CHAT_SERVER_BIND_ADDRESS=127.0.0.1             # 선택, 기본값
 
 ## 데이터베이스
 
-`Server\Database\schema.sql`은 MySQL 8.4, InnoDB, utf8mb4 전용입니다. 로그인 성공 응답 뒤 최근 채팅 최대 50개가 오래된 순서로 기존 `ChatDelivered` 패킷을 통해 전달됩니다. 별도 방이나 history 패킷 형식은 추가하지 않습니다.
+`Server\Database\schema.sql`은 MySQL 8.4, InnoDB, utf8mb4 전용입니다. 로그인 성공 응답 뒤 최근 채팅 최대 50개가 오래된 순서로 `ChatDelivered` 패킷을 통해 전달됩니다. 프로토콜 버전 2의 `ChatDelivered`는 작성자, 본문, UTC Unix millisecond를 포함하며, 클라이언트는 이를 로컬 날짜와 `HH:mm`으로 표시합니다. 별도 방이나 history 패킷 형식은 추가하지 않습니다.
 
 ## 테스트
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@ struct ChatHistoryEntry
 {
     std::string username;
     std::string message;
+    std::int64_t timestampMilliseconds = 0;
 };
 
 struct LoginResult

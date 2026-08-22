@@ -11,7 +11,7 @@ namespace protocol
 {
     constexpr std::size_t kFrameHeaderBytes = 12;
     constexpr std::size_t kMaxPayloadBytes = 64 * 1024;
-    constexpr std::uint16_t kProtocolVersion = 1;
+    constexpr std::uint16_t kProtocolVersion = 2;
 
     enum class MessageType : std::uint16_t
     {

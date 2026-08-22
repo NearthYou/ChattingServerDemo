@@ -408,7 +408,7 @@ public:
         }
         Statement statement(connection, statementTimeoutSeconds);
         constexpr wchar_t query[] =
-            L"SELECT username, body FROM ("
+            L"SELECT username, body, CAST(UNIX_TIMESTAMP(created_at) * 1000 AS SIGNED) FROM ("
             L"SELECT u.username AS username, c.body AS body, c.created_at AS created_at, c.id AS id "
             L"FROM chat_messages c JOIN users u ON u.id = c.user_id "
             L"ORDER BY c.created_at DESC, c.id DESC LIMIT ?"
@@ -442,12 +442,19 @@ public:
             std::array<SQLWCHAR, 1001> message{};
             SQLLEN usernameLength = 0;
             SQLLEN messageLength = 0;
+            SQLBIGINT timestampMilliseconds = 0;
+            SQLLEN timestampLength = 0;
             const SQLRETURN usernameStatus = SQLGetData(
                 statement.Get(), 1, SQL_C_WCHAR, username.data(), sizeof(username), &usernameLength);
             const SQLRETURN messageStatus = SQLGetData(
                 statement.Get(), 2, SQL_C_WCHAR, message.data(), sizeof(message), &messageLength);
+            const SQLRETURN timestampStatus = SQLGetData(
+                statement.Get(), 3, SQL_C_SBIGINT,
+                &timestampMilliseconds, sizeof(timestampMilliseconds), &timestampLength);
             if (usernameStatus != SQL_SUCCESS || messageStatus != SQL_SUCCESS ||
-                usernameLength < 0 || messageLength < 0)
+                timestampStatus != SQL_SUCCESS ||
+                usernameLength < 0 || messageLength < 0 ||
+                timestampLength == SQL_NULL_DATA || timestampMilliseconds < 0)
             {
                 result.status = DatabaseStatus::InvalidData;
                 result.messages.clear();
@@ -463,6 +470,7 @@ public:
                 result.messages.clear();
                 return result;
             }
+            converted.timestampMilliseconds = static_cast<std::int64_t>(timestampMilliseconds);
             result.messages.push_back(std::move(converted));
         }
     }

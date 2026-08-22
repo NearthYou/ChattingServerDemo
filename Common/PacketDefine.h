@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 
 enum PacketType
@@ -18,4 +19,5 @@ struct ChatPacket
     std::string sender;
     std::string message;
     bool isMine;
-}; 
+    std::int64_t timestampMilliseconds = 0;
+};

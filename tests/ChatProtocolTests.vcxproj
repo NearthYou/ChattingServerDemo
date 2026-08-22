@@ -75,12 +75,14 @@
     <ClCompile Include="PacketCodecTests.cpp" />
     <ClCompile Include="NetworkManagerIntegrationTests.cpp" />
     <ClCompile Include="..\Client\Network\NetworkManager.cpp" />
+    <ClCompile Include="..\Client\UI\ChatTimeline.cpp" />
     <ClCompile Include="..\Client\UI\RegistrationValidation.cpp" />
     <ClCompile Include="..\Common\Protocol\ChatProtocol.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Common\Protocol\ChatProtocol.h" />
     <ClInclude Include="..\Client\UI\ChatMessageLayout.h" />
+    <ClInclude Include="..\Client\UI\ChatTimeline.h" />
     <ClInclude Include="..\Client\UI\RegistrationValidation.h" />
     <ClInclude Include="..\Client\Network\NetworkPrimitives.h" />
     <ClInclude Include="..\Client\Network\NetworkManager.h" />

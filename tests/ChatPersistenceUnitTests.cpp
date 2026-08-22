@@ -255,9 +255,11 @@ namespace
         Require(reducer.IsLoggedIn(), "login success did not log the client in");
         Require(reducer.ChatCount() == 0, "login success did not clear stale chat history");
 
-        reducer.Apply({ PACKET_TYPE_CHAT, "alice", "history", false });
+        reducer.Apply({ PACKET_TYPE_CHAT, "alice", "history", false, 1763856000123LL });
         Require(reducer.ChatCount() == 1, "history delivery was not appended");
         Require(reducer.ChatMessages()[0].isMine, "restored own history was rendered as another user");
+        Require(reducer.ChatMessages()[0].timestampMilliseconds == 1763856000123LL,
+            "restored history lost its timestamp");
         reducer.Apply({ PACKET_TYPE_CHAT, "bob", "peer history", false });
         Require(!reducer.ChatMessages()[1].isMine, "peer history was rendered as the current user");
         reducer.Disconnect();

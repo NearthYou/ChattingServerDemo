@@ -2,6 +2,7 @@
 
 #include <Ws2tcpip.h>
 
+#include <charconv>
 #include <chrono>
 #include <utility>
 
@@ -370,11 +371,26 @@ void NetworkManager::NetworkLoop(std::string address, int port)
             event.packet.message = "Login/Register failed";
             break;
         case chat::protocol::MessageType::ChatDelivered:
+        {
+            std::int64_t timestampMilliseconds = 0;
+            const std::string& encodedTimestamp = message.fields[2];
+            const auto parsed = std::from_chars(
+                encodedTimestamp.data(),
+                encodedTimestamp.data() + encodedTimestamp.size(),
+                timestampMilliseconds);
+            if (parsed.ec != std::errc() ||
+                parsed.ptr != encodedTimestamp.data() + encodedTimestamp.size() ||
+                timestampMilliseconds < 0)
+            {
+                return false;
+            }
             event.packet.type = PACKET_TYPE_CHAT;
             event.packet.sender = message.fields[0];
             event.packet.message = message.fields[1];
             event.packet.isMine = message.requestId != 0 && pendingChatRequests.Consume(message.requestId);
+            event.packet.timestampMilliseconds = timestampMilliseconds;
             break;
+        }
         default:
             return false;
         }

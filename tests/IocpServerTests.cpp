@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -36,6 +37,24 @@ namespace
         {
             throw std::runtime_error(message);
         }
+    }
+
+    void RequireDeliveredChat(
+        const Message& message,
+        const std::string& username,
+        const std::string& body,
+        const std::string& failure)
+    {
+        Require(message.fields.size() == 3, failure + " timestamp field was missing");
+        Require(message.fields[0] == username && message.fields[1] == body, failure);
+        std::int64_t timestamp = 0;
+        const std::string& encoded = message.fields[2];
+        const auto parsed = std::from_chars(
+            encoded.data(), encoded.data() + encoded.size(), timestamp);
+        Require(parsed.ec == std::errc() &&
+            parsed.ptr == encoded.data() + encoded.size() &&
+            timestamp > 0,
+            failure + " timestamp was invalid");
     }
 
     std::string Environment(const char* name)
@@ -88,10 +107,13 @@ namespace
             users[username] = password;
         }
 
-        void AddHistory(const std::string& username, const std::string& message)
+        void AddHistory(
+            const std::string& username,
+            const std::string& message,
+            std::int64_t timestampMilliseconds)
         {
             std::lock_guard<std::mutex> lock(mutex);
-            history.push_back({ username, message });
+            history.push_back({ username, message, timestampMilliseconds });
         }
 
         void SetUnavailable(bool unavailable)
@@ -435,15 +457,15 @@ namespace
         SendAll(alice, Encode({ MessageType::ChatSend, 903, { "alice-to-bob" } }));
         const auto aliceFirst = ReceiveMessages(alice, 1);
         const auto bobFirst = ReceiveMessages(bob, 1);
-        Require(aliceFirst[0].fields == std::vector<std::string>({ "lan_alice", "alice-to-bob" }),
-            "LAN origin did not receive its first delivery");
+        RequireDeliveredChat(
+            aliceFirst[0], "lan_alice", "alice-to-bob", "LAN origin did not receive its first delivery");
         Require(bobFirst[0].fields == aliceFirst[0].fields, "LAN peer did not receive Alice's message");
 
         SendAll(bob, Encode({ MessageType::ChatSend, 904, { "bob-to-alice" } }));
         const auto aliceSecond = ReceiveMessages(alice, 1);
         const auto bobSecond = ReceiveMessages(bob, 1);
-        Require(aliceSecond[0].fields == std::vector<std::string>({ "lan_bob", "bob-to-alice" }),
-            "LAN peer did not receive Bob's message");
+        RequireDeliveredChat(
+            aliceSecond[0], "lan_bob", "bob-to-alice", "LAN peer did not receive Bob's message");
         Require(bobSecond[0].fields == aliceSecond[0].fields, "LAN origin did not receive its second delivery");
 
         CloseSocket(alice);
@@ -476,12 +498,14 @@ namespace
         Require(originMessages[0].requestId == 20, "login response lost request id");
         Require(originMessages[1].type == MessageType::ChatDelivered, "origin did not receive delivered chat");
         Require(originMessages[1].requestId == 21, "origin chat response lost request id");
-        Require(originMessages[1].fields == std::vector<std::string>({ "alice", "hello" }), "origin chat identity was not server-derived");
+        RequireDeliveredChat(
+            originMessages[1], "alice", "hello", "origin chat identity was not server-derived");
 
         const auto peerMessages = ReceiveMessages(peer, 1);
         Require(peerMessages[0].type == MessageType::ChatDelivered, "peer did not receive delivered chat");
         Require(peerMessages[0].requestId == 0, "peer broadcast request id was not zero");
-        Require(peerMessages[0].fields == std::vector<std::string>({ "alice", "hello" }), "peer chat identity was not server-derived");
+        RequireDeliveredChat(
+            peerMessages[0], "alice", "hello", "peer chat identity was not server-derived");
 
         const auto stored = service.Messages();
         Require(stored == std::vector<std::pair<std::string, std::string>>({ { "alice", "hello" } }), "service saw an untrusted sender");
@@ -518,8 +542,8 @@ namespace
         const auto delivered = ReceiveMessages(peer, 1);
         Require(delivered[0].type == MessageType::ChatDelivered, "peer did not receive persisted chat");
         Require(delivered[0].requestId == 0, "peer delivery reused the closed origin request id");
-        Require(delivered[0].fields == std::vector<std::string>({ "alice", "persisted" }),
-            "peer delivery changed the persisted chat");
+        RequireDeliveredChat(
+            delivered[0], "alice", "persisted", "peer delivery changed the persisted chat");
         Require(service.Messages() ==
             std::vector<std::pair<std::string, std::string>>({ { "alice", "persisted" } }),
             "message was not persisted before peer delivery");
@@ -533,8 +557,8 @@ namespace
     {
         FakeChatService service;
         service.AddUser("alice", "password");
-        service.AddHistory("bob", "older");
-        service.AddHistory("carol", "newer");
+        service.AddHistory("bob", "older", 1763856000123LL);
+        service.AddHistory("carol", "newer", 1763856060456LL);
         Server server(service);
         Require(server.Init(0), "server init failed");
 
@@ -545,9 +569,11 @@ namespace
         Require(loginMessages[0].requestId == 41, "login response request id changed");
         Require(loginMessages[1].type == MessageType::ChatDelivered && loginMessages[1].requestId == 0,
             "first history item was not an unsolicited delivery");
-        Require(loginMessages[1].fields == std::vector<std::string>({ "bob", "older" }),
+        Require(loginMessages[1].fields ==
+            std::vector<std::string>({ "bob", "older", "1763856000123" }),
             "oldest history item was not first");
-        Require(loginMessages[2].fields == std::vector<std::string>({ "carol", "newer" }),
+        Require(loginMessages[2].fields ==
+            std::vector<std::string>({ "carol", "newer", "1763856060456" }),
             "history order changed");
 
         SOCKET registration = Connect(server.GetBoundPort());

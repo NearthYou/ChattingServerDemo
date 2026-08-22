@@ -1,5 +1,6 @@
 #include "../Common/Protocol/ChatProtocol.h"
 #include "../Client/UI/ChatMessageLayout.h"
+#include "../Client/UI/ChatTimeline.h"
 #include "../Client/UI/RegistrationValidation.h"
 #include "../Client/Network/NetworkPrimitives.h"
 
@@ -68,7 +69,7 @@ namespace
         const auto bytes = Encode({ MessageType::ChatSend, 0x11223344u, { "hi" } });
         const std::vector<std::uint8_t> expected = {
             0x00, 0x00, 0x00, 0x06,
-            0x00, 0x01,
+            0x00, 0x02,
             0x00, 0x03,
             0x11, 0x22, 0x33, 0x44,
             0x00, 0x00, 0x00, 0x02,
@@ -80,7 +81,11 @@ namespace
 
     void FragmentedPacketIsEmittedOnlyWhenComplete()
     {
-        const auto bytes = Encode({ MessageType::ChatDelivered, 27u, { "alice", u8"\uc548\ub155" } });
+        const auto bytes = Encode({
+            MessageType::ChatDelivered,
+            27u,
+            { "alice", u8"\uc548\ub155", "1763856000123" }
+        });
         StreamingDecoder decoder;
 
         for (std::size_t index = 0; index < bytes.size(); ++index)
@@ -93,7 +98,8 @@ namespace
             {
                 CHECK(result.messages[0].type == MessageType::ChatDelivered);
                 CHECK(result.messages[0].requestId == 27u);
-                CHECK(result.messages[0].fields == std::vector<std::string>({ "alice", u8"\uc548\ub155" }));
+                CHECK(result.messages[0].fields ==
+                    std::vector<std::string>({ "alice", u8"\uc548\ub155", "1763856000123" }));
             }
         }
     }
@@ -101,7 +107,11 @@ namespace
     void CoalescedPacketsAreEmittedInOrder()
     {
         auto first = Encode({ MessageType::LoginSucceeded, 41u, {} });
-        const auto second = Encode({ MessageType::ChatDelivered, 42u, { "bob", "hello" } });
+        const auto second = Encode({
+            MessageType::ChatDelivered,
+            42u,
+            { "bob", "hello", "1763856060456" }
+        });
         first.insert(first.end(), second.begin(), second.end());
 
         StreamingDecoder decoder;
@@ -113,7 +123,8 @@ namespace
         CHECK(result.messages[0].requestId == 41u);
         CHECK(result.messages[1].type == MessageType::ChatDelivered);
         CHECK(result.messages[1].requestId == 42u);
-        CHECK(result.messages[1].fields == std::vector<std::string>({ "bob", "hello" }));
+        CHECK(result.messages[1].fields ==
+            std::vector<std::string>({ "bob", "hello", "1763856060456" }));
     }
 
     void OversizedPayloadIsRejectedFromHeader()
@@ -278,6 +289,18 @@ namespace
             "Password must be 8-128 bytes. Three Korean characters meet the minimum.");
         CHECK(chat::ui::RegistrationValidationMessage("alice", "password") == nullptr);
     }
+
+    void TimelineFormatsClockAndDateSeparators()
+    {
+        const chat::ui::LocalChatTime first{ 2026, 8, 23, 2, 5 };
+        const chat::ui::LocalChatTime sameDay{ 2026, 8, 23, 23, 59 };
+        const chat::ui::LocalChatTime nextDay{ 2026, 8, 24, 0, 0 };
+
+        CHECK(chat::ui::FormatChatClock(first) == "02:05");
+        CHECK(chat::ui::FormatChatDate(first) == "2026-08-23");
+        CHECK(chat::ui::IsSameChatDate(first, sameDay));
+        CHECK(!chat::ui::IsSameChatDate(first, nextDay));
+    }
 }
 
 int main()
@@ -295,6 +318,7 @@ int main()
     PartialSendKeepsFrameOrder();
     OwnMessageAlignmentStaysInsideAvailableRegion();
     RegistrationRulesExplainFailures();
+    TimelineFormatsClockAndDateSeparators();
     failures += RunNetworkManagerIntegrationTests();
 
     if (failures != 0)

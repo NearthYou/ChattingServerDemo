@@ -39,6 +39,7 @@ struct StoredChatMessage
 {
     std::string username;
     std::string message;
+    std::int64_t timestampMilliseconds = 0;
 };
 
 struct DatabaseHistoryResult

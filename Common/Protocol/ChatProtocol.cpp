@@ -51,8 +51,9 @@ namespace
         {
         case MessageType::LoginRequest:
         case MessageType::RegisterRequest:
-        case MessageType::ChatDelivered:
             return 2;
+        case MessageType::ChatDelivered:
+            return 3;
         case MessageType::ChatSend:
             return 1;
         case MessageType::LoginSucceeded:

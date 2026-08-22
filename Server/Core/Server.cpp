@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -25,6 +26,12 @@ namespace
 {
     constexpr std::size_t kReceiveBufferBytes = 16 * 1024;
     constexpr DWORD kAcceptAddressBytes = sizeof(sockaddr_in) + 16;
+
+    std::int64_t CurrentUnixMilliseconds()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
 
     enum class IoOperationType
     {
@@ -845,7 +852,11 @@ private:
                 if (!SendMessage(session, {
                         MessageType::ChatDelivered,
                         0,
-                        { result.history[index].username, result.history[index].message }
+                        {
+                            result.history[index].username,
+                            result.history[index].message,
+                            std::to_string(result.history[index].timestampMilliseconds)
+                        }
                     }))
                 {
                     return;
@@ -882,6 +893,7 @@ private:
                 return;
             }
 
+            const std::string timestamp = std::to_string(CurrentUnixMilliseconds());
             const auto recipients = SnapshotSessions(true);
             for (const auto& recipient : recipients)
             {
@@ -889,7 +901,7 @@ private:
                 SendMessage(recipient, {
                     MessageType::ChatDelivered,
                     requestId,
-                    { username, message.fields[0] }
+                    { username, message.fields[0], timestamp }
                 });
             }
             return;
