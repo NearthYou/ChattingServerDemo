@@ -539,6 +539,17 @@ namespace
         const std::string aliceMessage = "history-a-" + runId;
         const std::string bobMessage = "history-b-" + runId;
 
+        if (phase == "offline")
+        {
+            NetworkManager offline;
+            CHECK(!offline.Connect(address, port));
+            CHECK(!offline.IsConnected());
+            CHECK(!offline.Connect(address, port));
+            CHECK(!offline.IsConnected());
+            offline.Disconnect();
+            return;
+        }
+
         NetworkManager alice;
         CHECK(alice.Connect(address, port));
         if (!alice.IsConnected()) return;

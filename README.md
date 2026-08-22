@@ -66,9 +66,13 @@ $env:CHAT_LIVE_E2E_PHASE = 'write'
 .\scripts\Start-ChatService.ps1 -BindAddress 192.168.0.10 -Port 8888
 $env:CHAT_LIVE_E2E_PHASE = 'read'
 .\tests\x64\Release\ChatProtocolTests.exe
+
+.\scripts\Stop-ChatService.ps1
+$env:CHAT_LIVE_E2E_PHASE = 'offline'
+.\tests\x64\Release\ChatProtocolTests.exe
 ```
 
-`write`는 서로 다른 두 계정의 가입, 로그인, 양방향 송수신을 검사하고 `read`는 재시작 후 두 메시지의 기록 복원을 검사합니다.
+`write`는 서로 다른 두 계정의 가입, 로그인, 양방향 송수신을 검사하고 `read`는 재시작 후 두 메시지의 기록 복원을 검사합니다. `offline`은 서버 종료 상태에서 같은 주소로 두 번 재접속해 실패 상태와 worker 정리를 검사합니다.
 
 ## 직접 실행 환경 변수
 
