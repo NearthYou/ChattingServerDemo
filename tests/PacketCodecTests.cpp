@@ -1,4 +1,5 @@
 #include "../Common/Protocol/ChatProtocol.h"
+#include "../Client/UI/ChatMessageLayout.h"
 #include "../Client/Network/NetworkPrimitives.h"
 
 #include <cstdint>
@@ -240,6 +241,19 @@ namespace
         CHECK(queue.Consume(2));
         CHECK(queue.Empty());
     }
+
+    void OwnMessageAlignmentStaysInsideAvailableRegion()
+    {
+        constexpr float cursorX = 12.0f;
+        constexpr float availableWidth = 300.0f;
+
+        const float shortMessageX = chat::ui::RightAlignedMessageX(cursorX, availableWidth, 80.0f);
+        CHECK(shortMessageX == 232.0f);
+        CHECK(shortMessageX + 80.0f == cursorX + availableWidth);
+
+        const float longMessageX = chat::ui::RightAlignedMessageX(cursorX, availableWidth, 400.0f);
+        CHECK(longMessageX == cursorX);
+    }
 }
 
 int main()
@@ -255,6 +269,7 @@ int main()
     WrongFieldShapeIsRejected();
     BoundedQueueRejectsOverflowWithoutReordering();
     PartialSendKeepsFrameOrder();
+    OwnMessageAlignmentStaysInsideAvailableRegion();
     failures += RunNetworkManagerIntegrationTests();
 
     if (failures != 0)

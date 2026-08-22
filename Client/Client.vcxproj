@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="Core\ImGuiManager.h" />
     <ClInclude Include="UI\Application.h" />
+    <ClInclude Include="UI\ChatMessageLayout.h" />
     <ClInclude Include="UI\ClientPacketReducer.h" />
     <ClInclude Include="UI\D3D11Manager.h" />
     <ClInclude Include="Network\NetworkManager.h" />

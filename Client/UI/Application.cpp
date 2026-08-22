@@ -2,6 +2,7 @@
 #include <Windows.h>
 
 #include "Application.h"
+#include "ChatMessageLayout.h"
 #include "../ImGui/imgui.h"
 #include "../ImGui/imgui_impl_win32.h"
 #include "../ImGui/imgui_impl_dx11.h"
@@ -253,16 +254,33 @@ void Application::DrawChatUI()
         ImGuiWindowFlags_NoScrollWithMouse
     );
 
+    const float contentStartX = ImGui::GetCursorPosX();
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float contentRightX = contentStartX + availableWidth;
+
     for (const auto& msg : ClientState.ChatMessages())
     {
+        const std::string displayText = msg.isMine
+            ? "[Me] " + msg.text
+            : "[" + msg.sender + "] " + msg.text;
+
+        ImGui::SetCursorPosX(contentStartX);
         if (msg.isMine)
         {
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f);
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[Me] %s", msg.text.c_str());
+            const float textWidth = ImGui::CalcTextSize(displayText.c_str()).x;
+            ImGui::SetCursorPosX(chat::ui::RightAlignedMessageX(
+                contentStartX,
+                availableWidth,
+                textWidth));
+            ImGui::PushTextWrapPos(contentRightX);
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s", displayText.c_str());
+            ImGui::PopTextWrapPos();
         }
         else
         {
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "[%s] %s", msg.sender.c_str(), msg.text.c_str());
+            ImGui::PushTextWrapPos(contentRightX);
+            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "%s", displayText.c_str());
+            ImGui::PopTextWrapPos();
         }
     }
 
