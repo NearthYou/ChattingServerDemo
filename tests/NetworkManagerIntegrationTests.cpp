@@ -295,6 +295,86 @@ namespace
         CHECK(tracker.Size() == 128u);
     }
 
+    std::vector<NetworkStatus> WaitForTerminalConnectionStatus(
+        NetworkManager& manager,
+        NetworkStatus terminal)
+    {
+        std::vector<NetworkStatus> statuses;
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            for (const auto& event : manager.GetPendingEvents())
+            {
+                if (event.kind == NetworkEvent::Kind::Status)
+                {
+                    statuses.push_back(event.status);
+                }
+            }
+            if (!statuses.empty() && statuses.back() == terminal)
+            {
+                break;
+            }
+            std::this_thread::sleep_for(5ms);
+        }
+        return statuses;
+    }
+
+    void BeginConnectReturnsPromptlyAndPublishesOrderedStatus()
+    {
+        std::uint16_t successPort = 0;
+        SOCKET listener = CreateLoopbackListener(successPort);
+        CHECK(listener != INVALID_SOCKET);
+        if (listener == INVALID_SOCKET)
+        {
+            return;
+        }
+
+        std::atomic<bool> stopPeer{ false };
+        std::thread peerThread([listener, &stopPeer] {
+            SOCKET peer = AcceptWithDeadline(listener, stopPeer);
+            closesocket(listener);
+            if (peer != INVALID_SOCKET)
+            {
+                char ignored = 0;
+                recv(peer, &ignored, 1, 0);
+                closesocket(peer);
+            }
+        });
+
+        NetworkManager successManager;
+        const auto successStart = std::chrono::steady_clock::now();
+        CHECK(successManager.BeginConnect("127.0.0.1", successPort));
+        CHECK(std::chrono::steady_clock::now() - successStart < 250ms);
+        const auto successStatuses = WaitForTerminalConnectionStatus(
+            successManager,
+            NetworkStatus::Connected);
+        CHECK(successStatuses ==
+            std::vector<NetworkStatus>({ NetworkStatus::Connecting, NetworkStatus::Connected }));
+        successManager.Disconnect();
+        stopPeer.store(true);
+        peerThread.join();
+
+        std::uint16_t closedPort = 0;
+        SOCKET closedListener = CreateLoopbackListener(closedPort);
+        CHECK(closedListener != INVALID_SOCKET);
+        if (closedListener == INVALID_SOCKET)
+        {
+            return;
+        }
+        closesocket(closedListener);
+
+        NetworkManager failureManager;
+        const auto failureStart = std::chrono::steady_clock::now();
+        CHECK(failureManager.BeginConnect("127.0.0.1", closedPort));
+        CHECK(std::chrono::steady_clock::now() - failureStart < 250ms);
+        const auto failureStatuses = WaitForTerminalConnectionStatus(
+            failureManager,
+            NetworkStatus::ConnectFailed);
+        CHECK(failureStatuses ==
+            std::vector<NetworkStatus>({ NetworkStatus::Connecting, NetworkStatus::ConnectFailed }));
+        failureManager.Disconnect();
+    }
+
     void FailedConnectCanBeStoppedAndRetriedWithoutAStuckWorker()
     {
         std::uint16_t closedPort = 0;
@@ -398,6 +478,7 @@ int RunNetworkManagerIntegrationTests()
     }
 
     PendingRequestTrackerStaysBounded();
+    BeginConnectReturnsPromptlyAndPublishesOrderedStatus();
     FailedConnectCanBeStoppedAndRetriedWithoutAStuckWorker();
     LoopbackPeerExercisesNetworkManagerFramingAndShutdown();
 

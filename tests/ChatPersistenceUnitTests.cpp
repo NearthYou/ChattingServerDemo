@@ -174,11 +174,15 @@ namespace
     {
         Require(chat::validation::IsValidUsername("alice"), "ordinary username was rejected");
         Require(chat::validation::IsValidUsername(u8"사용자"), "Korean username was rejected");
+        Require(!chat::validation::IsValidUsername(u8"ab\u200b"), "zero-width username was accepted");
+        Require(!chat::validation::IsValidUsername(u8"ab\u202e"), "bidi override username was accepted");
         Require(!chat::validation::IsValidUsername("ab"), "short username was accepted");
         Require(!chat::validation::IsValidUsername(std::string(21, 'a')), "long username was accepted");
         Require(chat::validation::IsValidPassword(std::string(8, 'p')), "minimum password was rejected");
         Require(!chat::validation::IsValidPassword(std::string(7, 'p')), "short password was accepted");
+        Require(chat::validation::IsValidPassword(u8"password\u202e"), "valid UTF-8 password format control was rejected");
         Require(chat::validation::IsValidMessage("x"), "minimum message was rejected");
+        Require(chat::validation::IsValidMessage(u8"hello\u200bworld"), "valid UTF-8 message format control was rejected");
         Require(!chat::validation::IsValidMessage(""), "empty message was accepted");
         Require(!chat::validation::IsValidMessage(std::string(1001, 'x')), "oversized message was accepted");
     }

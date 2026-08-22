@@ -71,4 +71,4 @@ Docker Engine과 x64 Unicode ODBC 드라이버가 모두 준비된 환경에서�
 
 ## Release ZIP 범위
 
-`scripts\Package-Release.ps1`은 Server와 Client 실행 파일, 세 스크립트, Compose 파일, 스키마, README, `.env.example`만 `dist\ChatService-x64-Release.zip`에 넣습니다. ODBC 설치 파일, `.env.local`, PDB, ILK, Docker volume 데이터는 포함하지 않습니다.
+`scripts\Package-Release.ps1`은 Server와 Client 실행 파일, 네 스크립트, Compose 파일, 스키마, README, `.env.example`만 `dist\ChatService-x64-Release.zip`에 넣습니다. ODBC 설치 파일, `.env.local`, PDB, ILK, Docker volume 데이터는 포함하지 않습니다.

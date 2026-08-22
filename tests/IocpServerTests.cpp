@@ -134,7 +134,14 @@ namespace
 
         ChatServiceStatus StoreMessage(const std::string& username, const std::string& message) override
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::unique_lock<std::mutex> lock(mutex);
+            if (blockNextStore)
+            {
+                blockNextStore = false;
+                storeEntered = true;
+                storeCondition.notify_all();
+                storeCondition.wait(lock, [this] { return storeReleased; });
+            }
             if (operationsUnavailable)
             {
                 return ChatServiceStatus::Unavailable;
@@ -169,6 +176,28 @@ namespace
             authenticationCondition.notify_all();
         }
 
+        void BlockNextStore()
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            blockNextStore = true;
+            storeReleased = false;
+            storeEntered = false;
+        }
+
+        void WaitForStoreEntry()
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            const bool entered = storeCondition.wait_for(lock, 2s, [this] { return storeEntered; });
+            Require(entered, "message store call did not block");
+        }
+
+        void ReleaseStore()
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            storeReleased = true;
+            storeCondition.notify_all();
+        }
+
         std::vector<std::pair<std::string, std::string>> Messages() const
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -184,6 +213,7 @@ namespace
     private:
         mutable std::mutex mutex;
         std::condition_variable authenticationCondition;
+        std::condition_variable storeCondition;
         std::unordered_map<std::string, std::string> users;
         std::vector<std::pair<std::string, std::string>> storedMessages;
         std::vector<ChatHistoryEntry> history;
@@ -194,6 +224,9 @@ namespace
         bool blockNextAuthentication = false;
         bool authenticationEntered = false;
         bool authenticationReleased = false;
+        bool blockNextStore = false;
+        bool storeEntered = false;
+        bool storeReleased = false;
     };
 
     std::vector<std::uint8_t> Encode(const Message& message)
@@ -292,6 +325,16 @@ namespace
         Require(diagnostics.pendingAccepts == 0, "AcceptEx remained pending after shutdown");
     }
 
+    void TestDefaultDatabaseQueueSupportsPlannedBurst()
+    {
+        constexpr std::size_t plannedClientCount = 100;
+        constexpr std::size_t messagesPerClient = 10;
+        const ServerOptions options;
+        Require(
+            options.maxQueuedDatabaseJobs >= plannedClientCount * messagesPerClient,
+            "default database queue cannot hold the planned 100-client burst");
+    }
+
     void RequireConnectionClosed(SOCKET socketHandle);
 
     void TestPrepostedAcceptPoolAndShutdownCounters()
@@ -363,6 +406,43 @@ namespace
         Require(stored == std::vector<std::pair<std::string, std::string>>({ { "alice", "hello" } }), "service saw an untrusted sender");
 
         CloseSocket(origin);
+        CloseSocket(peer);
+        server.Shutdown();
+        RequireDrained(server.GetDiagnostics());
+    }
+
+    void TestPersistedChatReachesPeersAfterOriginDisconnects()
+    {
+        FakeChatService service;
+        service.AddUser("alice", "password");
+        service.AddUser("bob", "password");
+        Server server(service);
+        Require(server.Init(0), "server init failed");
+
+        SOCKET origin = Connect(server.GetBoundPort());
+        SOCKET peer = Connect(server.GetBoundPort());
+        Login(origin, "alice", 31);
+        Login(peer, "bob", 32);
+
+        service.BlockNextStore();
+        SendAll(origin, Encode({ MessageType::ChatSend, 33, { "persisted" } }));
+        service.WaitForStoreEntry();
+        CloseSocket(origin);
+        WaitUntil(
+            [&server] { return server.GetDiagnostics().activeSessions == 1; },
+            2s,
+            "closed origin remained active while storage was blocked");
+        service.ReleaseStore();
+
+        const auto delivered = ReceiveMessages(peer, 1);
+        Require(delivered[0].type == MessageType::ChatDelivered, "peer did not receive persisted chat");
+        Require(delivered[0].requestId == 0, "peer delivery reused the closed origin request id");
+        Require(delivered[0].fields == std::vector<std::string>({ "alice", "persisted" }),
+            "peer delivery changed the persisted chat");
+        Require(service.Messages() ==
+            std::vector<std::pair<std::string, std::string>>({ { "alice", "persisted" } }),
+            "message was not persisted before peer delivery");
+
         CloseSocket(peer);
         server.Shutdown();
         RequireDrained(server.GetDiagnostics());
@@ -726,8 +806,10 @@ int main()
 
     try
     {
+        Run("default database queue supports planned burst", TestDefaultDatabaseQueueSupportsPlannedBurst);
         Run("preposted accepts and shutdown counters", TestPrepostedAcceptPoolAndShutdownCounters);
         Run("fragmented and coalesced real frames", TestFragmentedAndCoalescedFramesPreserveIdentityAndRequestIds);
+        Run("persisted chat survives origin disconnect", TestPersistedChatReachesPeersAfterOriginDisconnects);
         Run("login history and registration state", TestLoginHistoryAndRegistrationState);
         Run("database isolation and unavailable mapping", TestDatabaseUnavailableAndBlockedAuthenticationKeepIocpResponsive);
         Run("database queue overflow diagnostics", TestDatabaseQueueOverflowIsNonblockingAndDiagnostic);

@@ -859,9 +859,13 @@ private:
             {
                 status = ChatServiceStatus::Unavailable;
             }
-            if (status != ChatServiceStatus::Succeeded || session->IsClosed() || stopping.load())
+            if (status != ChatServiceStatus::Succeeded)
             {
                 CloseSession(session);
+                return;
+            }
+            if (stopping.load())
+            {
                 return;
             }
 

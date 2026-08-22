@@ -30,6 +30,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'Server\x64\Release\Server.exe') -Destination (Join-Path $stage 'bin\Server.exe')
     Copy-Item -LiteralPath (Join-Path $root 'Client\x64\Release\Client.exe') -Destination (Join-Path $stage 'bin\Client.exe')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\Start-ChatService.ps1') -Destination (Join-Path $stage 'scripts\Start-ChatService.ps1')
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\ChatServiceLifecycle.ps1') -Destination (Join-Path $stage 'scripts\ChatServiceLifecycle.ps1')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\Stop-ChatService.ps1') -Destination (Join-Path $stage 'scripts\Stop-ChatService.ps1')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\Package-Release.ps1') -Destination (Join-Path $stage 'scripts\Package-Release.ps1')
     Copy-Item -LiteralPath (Join-Path $root 'Server\Database\schema.sql') -Destination (Join-Path $stage 'Server\Database\schema.sql')

@@ -104,43 +104,12 @@ NetworkManager::~NetworkManager()
 
 bool NetworkManager::Connect(const std::string& address, int port)
 {
-    if (address.empty() || port <= 0 || port > 65535)
-    {
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex);
-    if (isConnected.load(std::memory_order_acquire))
+    if (IsConnected())
     {
         return true;
     }
-
-    StopWorkerLocked();
-    outboundCommands.Clear();
-    inboundEvents.Clear();
-    nextRequestId.store(1, std::memory_order_relaxed);
-
-    stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (stopEvent == nullptr || wakeEvent == nullptr)
+    if (!BeginConnect(address, port))
     {
-        StopWorkerLocked();
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> resultLock(connectionResultMutex);
-        connectionResultReady = false;
-        connectionResult = false;
-    }
-
-    try
-    {
-        networkThread = std::thread(&NetworkManager::NetworkLoop, this, address, port);
-    }
-    catch (...)
-    {
-        StopWorkerLocked();
         return false;
     }
 
@@ -154,9 +123,62 @@ bool NetworkManager::Connect(const std::string& address, int port)
 
     if (!succeeded)
     {
+        std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex);
         StopWorkerLocked();
     }
     return succeeded;
+}
+
+bool NetworkManager::BeginConnect(const std::string& address, int port)
+{
+    if (address.empty() || port <= 0 || port > 65535)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex);
+    if (isConnected.load(std::memory_order_acquire))
+    {
+        return true;
+    }
+    if (isConnecting.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+
+    StopWorkerLocked();
+    outboundCommands.Clear();
+    inboundEvents.Clear();
+    nextRequestId.store(1, std::memory_order_relaxed);
+
+    stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (stopEvent == nullptr || wakeEvent == nullptr)
+    {
+        StopWorkerLocked();
+        PublishEvent(StatusEvent(NetworkStatus::ConnectFailed, "Network worker initialization failed."));
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> resultLock(connectionResultMutex);
+        connectionResultReady = false;
+        connectionResult = false;
+    }
+
+    isConnecting.store(true, std::memory_order_release);
+    PublishEvent(StatusEvent(NetworkStatus::Connecting, "Connecting to the server."));
+    try
+    {
+        networkThread = std::thread(&NetworkManager::NetworkLoop, this, address, port);
+    }
+    catch (...)
+    {
+        StopWorkerLocked();
+        PublishEvent(StatusEvent(NetworkStatus::ConnectFailed, "Network worker creation failed."));
+        return false;
+    }
+    return true;
 }
 
 void NetworkManager::Disconnect()
@@ -168,6 +190,11 @@ void NetworkManager::Disconnect()
 bool NetworkManager::IsConnected() const
 {
     return isConnected.load(std::memory_order_acquire);
+}
+
+bool NetworkManager::IsConnecting() const
+{
+    return isConnecting.load(std::memory_order_acquire);
 }
 
 bool NetworkManager::SendLoginRequest(const std::string& username, const std::string& password)
@@ -264,7 +291,6 @@ void NetworkManager::NetworkLoop(std::string address, int port)
         return;
     }
 
-    PublishEvent(StatusEvent(NetworkStatus::Connecting, "Connecting to the server."));
     const ConnectOutcome connectOutcome = ConnectSocket(
         socketHandle,
         address,
@@ -610,6 +636,7 @@ void NetworkManager::NetworkLoop(std::string address, int port)
 
 void NetworkManager::SignalConnectionResult(bool succeeded)
 {
+    isConnecting.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(connectionResultMutex);
         connectionResult = succeeded;
@@ -639,6 +666,7 @@ void NetworkManager::StopWorkerLocked()
     }
 
     isConnected.store(false, std::memory_order_release);
+    isConnecting.store(false, std::memory_order_release);
     outboundCommands.Clear();
     if (stopEvent != nullptr)
     {

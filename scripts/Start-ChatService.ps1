@@ -12,6 +12,7 @@ $composeFile = Join-Path $root 'docker-compose.yml'
 $envFile = Join-Path $root '.env.local'
 $runDirectory = Join-Path $root '.run'
 $runFile = Join-Path $runDirectory 'server.json'
+. (Join-Path $PSScriptRoot 'ChatServiceLifecycle.ps1')
 
 function Resolve-ReleaseBinary {
     param([string]$Name)
@@ -149,6 +150,10 @@ if (Test-Path -LiteralPath $runFile -PathType Leaf) {
     throw 'A recorded server process already exists. Run scripts/Stop-ChatService.ps1 first.'
 }
 
+$runningMysqlContainer = (@(& docker compose --env-file $envFile -f $composeFile ps --status running -q mysql) -join '').Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the existing MySQL service state.' }
+$mysqlWasRunningBeforeStartup = -not [string]::IsNullOrWhiteSpace($runningMysqlContainer)
+
 $launchedProcess = $null
 $stopEventName = $null
 Push-Location $root
@@ -200,7 +205,9 @@ try {
     if (Test-Path -LiteralPath $runFile -PathType Leaf) {
         Remove-Item -LiteralPath $runFile -Force
     }
-    & docker compose --env-file $envFile -f $composeFile down 2>$null | Out-Null
+    if (Test-ShouldStopComposeOnStartupFailure -MysqlWasRunningBeforeStartup $mysqlWasRunningBeforeStartup) {
+        & docker compose --env-file $envFile -f $composeFile down 2>$null | Out-Null
+    }
     throw $startupFailure
 } finally {
     [Environment]::SetEnvironmentVariable('CHAT_DB_PASSWORD', $null, 'Process')

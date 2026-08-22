@@ -25,9 +25,9 @@ bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
 
     ImGuiUI.Init(hWnd, D3D.GetDevice(), D3D.GetDeviceContext());
 
-    if (Network.Connect(ServerIp, ServerPort))
+    if (Network.BeginConnect(ServerIp, ServerPort))
     {
-        ConnectionStatus = "Connected.";
+        ConnectionStatus = "Connecting to the server.";
     }
     else
     {
@@ -89,7 +89,16 @@ int Application::Run()
                     break;
                 }
             }
-            else if (event.status == NetworkStatus::Disconnected ||
+            else if (event.status == NetworkStatus::Connecting)
+            {
+                ConnectionStatus = event.message;
+            }
+            else if (event.status == NetworkStatus::Connected)
+            {
+                ConnectionStatus = "Connected. Log in to reload recent history.";
+            }
+            else if (event.status == NetworkStatus::ConnectFailed ||
+                event.status == NetworkStatus::Disconnected ||
                 event.status == NetworkStatus::ProtocolError)
             {
                 ClientState.Disconnect();
@@ -124,13 +133,13 @@ void Application::DrawLoginUI()
 {
     ImGui::Begin("Login", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::TextUnformatted(ConnectionStatus.c_str());
-    if (!Network.IsConnected())
+    if (!Network.IsConnected() && !Network.IsConnecting())
     {
         if (ImGui::Button("Reconnect"))
         {
-            if (Network.Connect(ServerIp, ServerPort))
+            if (Network.BeginConnect(ServerIp, ServerPort))
             {
-                ConnectionStatus = "Connected. Log in to reload recent history.";
+                ConnectionStatus = "Connecting to the server.";
             }
             else
             {

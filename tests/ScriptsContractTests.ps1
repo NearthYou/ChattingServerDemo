@@ -3,11 +3,34 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$lifecycleHelper = Join-Path $root 'scripts\ChatServiceLifecycle.ps1'
 $scripts = @(
+    $lifecycleHelper,
     (Join-Path $root 'scripts\Start-ChatService.ps1'),
     (Join-Path $root 'scripts\Stop-ChatService.ps1'),
     (Join-Path $root 'scripts\Package-Release.ps1')
 )
+
+if (-not (Test-Path -LiteralPath $lifecycleHelper -PathType Leaf)) {
+    throw 'Chat service lifecycle helper is missing.'
+}
+. $lifecycleHelper
+if (-not (Test-ShouldStopComposeOnStartupFailure -MysqlWasRunningBeforeStartup $false)) {
+    throw 'Startup-owned MySQL would not be rolled back.'
+}
+if (Test-ShouldStopComposeOnStartupFailure -MysqlWasRunningBeforeStartup $true) {
+    throw 'Preexisting running MySQL would be composed down during rollback.'
+}
+
+$startScriptText = Get-Content -LiteralPath (Join-Path $root 'scripts\Start-ChatService.ps1') -Raw -Encoding utf8
+$preexistingProbe = $startScriptText.IndexOf('ps --status running -q mysql', [StringComparison]::Ordinal)
+$composeUp = $startScriptText.IndexOf('up -d', [StringComparison]::Ordinal)
+if ($preexistingProbe -lt 0 -or $composeUp -lt 0 -or $preexistingProbe -gt $composeUp) {
+    throw 'Start script does not record preexisting running MySQL before Compose up.'
+}
+if ($startScriptText -notmatch 'Test-ShouldStopComposeOnStartupFailure\s+-MysqlWasRunningBeforeStartup\s+\$mysqlWasRunningBeforeStartup') {
+    throw 'Start script rollback does not use the recorded MySQL state.'
+}
 
 foreach ($script in $scripts) {
     $tokens = $null

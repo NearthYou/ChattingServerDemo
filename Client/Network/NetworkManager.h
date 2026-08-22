@@ -48,9 +48,11 @@ public:
     NetworkManager(const NetworkManager&) = delete;
     NetworkManager& operator=(const NetworkManager&) = delete;
 
+    bool BeginConnect(const std::string& address, int port);
     bool Connect(const std::string& address, int port);
     void Disconnect();
     bool IsConnected() const;
+    bool IsConnecting() const;
 
     bool SendLoginRequest(const std::string& username, const std::string& password);
     bool SendRegisterRequest(const std::string& username, const std::string& password);
@@ -70,6 +72,7 @@ private:
     void StopWorkerLocked();
 
     std::atomic<bool> isConnected{ false };
+    std::atomic<bool> isConnecting{ false };
     std::atomic<std::uint32_t> nextRequestId{ 1 };
 
     BoundedQueue<chat::protocol::Message> outboundCommands;
