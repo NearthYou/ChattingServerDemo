@@ -25,7 +25,9 @@ flowchart LR
 
 클래스 소유 관계, packet 처리 순서와 shutdown 경계는 [아키텍처 문서](docs/architecture.md)에 정리했습니다.
 
-## 문제를 해결한 과정
+## 문제 해결 과정
+
+각 사례는 문제와 원인, 선택과 구현, 검증과 한계 순서로 정리했습니다.
 
 ### recv 단위에 기대던 text packet을 frame으로 분리
 
