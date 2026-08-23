@@ -1,34 +1,71 @@
 #pragma once
 
-#include <Windows.h>
-#include <sql.h>
-#include <sqlext.h>
+#include "../Security/PasswordHasher.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
-#include <utility>
-#include "../../Common/Utils/StringUtils.h"
+
+enum class DatabaseStatus
+{
+    Succeeded,
+    Conflict,
+    NotFound,
+    InvalidData,
+    Unavailable
+};
+
+struct DatabaseConfig
+{
+    std::wstring driverOverride;
+    std::string host = "127.0.0.1";
+    std::uint16_t port = 3307;
+    std::string database = "chatdb";
+    std::string username;
+    std::string password;
+    std::uint32_t loginTimeoutSeconds = 5;
+    std::uint32_t statementTimeoutSeconds = 5;
+};
+
+struct CredentialLookupResult
+{
+    DatabaseStatus status = DatabaseStatus::Unavailable;
+    PasswordRecord credential;
+};
+
+struct StoredChatMessage
+{
+    std::string username;
+    std::string message;
+    std::int64_t timestampMilliseconds = 0;
+};
+
+struct DatabaseHistoryResult
+{
+    DatabaseStatus status = DatabaseStatus::Unavailable;
+    std::vector<StoredChatMessage> messages;
+};
 
 class DatabaseManager
 {
 public:
-    static DatabaseManager& GetInstance();
-
-    bool Init();
-    bool Connect(const std::string& connectionString);
-    void Cleanup();
-
-    bool RegisterUser(const std::string& username, const std::string& password);
-    bool ValidateUser(const std::string& username, const std::string& password);
-    bool SaveChatMessage(const std::string& username, const std::string& message);
-    std::vector<std::pair<std::string, std::string>> GetChatHistory(int limit);
-
-private:
     DatabaseManager();
     ~DatabaseManager();
 
-    void HandleError(SQLHANDLE handle, SQLSMALLINT type);
+    DatabaseManager(const DatabaseManager&) = delete;
+    DatabaseManager& operator=(const DatabaseManager&) = delete;
 
-    SQLHENV hEnv;
-    SQLHDBC hDbc;
-    bool isConnected;
-}; 
+    DatabaseStatus Connect(const DatabaseConfig& config, std::string& diagnostic);
+    void Disconnect();
+
+    DatabaseStatus InsertUser(const std::string& username, const PasswordRecord& credential);
+    CredentialLookupResult LoadCredential(const std::string& username);
+    DatabaseStatus InsertMessage(const std::string& username, const std::string& message);
+    DatabaseHistoryResult LoadRecentHistory(std::size_t limit);
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl;
+};

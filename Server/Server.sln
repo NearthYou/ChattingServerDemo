@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Server", "Server.vcxproj", "{EB884BC2-A3B4-414A-A2D1-C0A688353312}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "IocpServerTests", "..\tests\IocpServerTests.vcxproj", "{48DD4033-A0A5-4BB5-9434-55D4051ED86D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -18,5 +20,11 @@ Global
 		{EB884BC2-A3B4-414A-A2D1-C0A688353312}.Release|Win32.Build.0 = Release|Win32
 		{EB884BC2-A3B4-414A-A2D1-C0A688353312}.Release|x64.ActiveCfg = Release|x64
 		{EB884BC2-A3B4-414A-A2D1-C0A688353312}.Release|x64.Build.0 = Release|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Debug|Win32.ActiveCfg = Debug|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Debug|x64.ActiveCfg = Debug|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Debug|x64.Build.0 = Debug|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Release|Win32.ActiveCfg = Release|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Release|x64.ActiveCfg = Release|x64
+		{48DD4033-A0A5-4BB5-9434-55D4051ED86D}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

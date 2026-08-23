@@ -174,3 +174,12 @@ x64/
 *.swn
 *.DS_Store
 Thumbs.db
+
+# Local service state and release packaging
+.env.local
+.run/
+dist/
+artifacts/
+*.zip
+.docker-data/
+mysql-data/

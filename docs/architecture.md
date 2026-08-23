@@ -1,15 +1,16 @@
 # 아키텍처
 
-ChattingServerDemo는 한 프로세스 안에 모든 기능을 넣지 않고 GUI 클라이언트, TCP 서버, SQL Server로 역할을 나눴습니다. 클라이언트 안에서도 화면 스레드와 수신 스레드가 분리됩니다.
+Chatting Server Demo는 GUI, client network worker, binary protocol, IOCP transport와 database service를 분리합니다. 각 경계는 bounded queue나 interface를 통해 연결해 느린 client와 database가 무제한 memory 증가로 이어지지 않게 합니다.
 
 ## 클래스 관계
 
 ```mermaid
 classDiagram
     class Application {
-        HWND hWnd
-        bool LoggedIn
-        ChatMessage[] ChatLog
+        ClientPacketReducer clientState
+        D3D11Manager d3d
+        ImGuiManager imgui
+        NetworkManager network
         +Init(instance, ip, port)
         +Run()
         +Shutdown()
@@ -17,177 +18,261 @@ classDiagram
         -DrawChatUI()
     }
 
-    class D3D11Manager {
-        IDXGISwapChain SwapChain
-        ID3D11Device Device
-        ID3D11DeviceContext DeviceContext
-        +Init(window)
-        +BeginFrame()
-        +EndFrame()
-        +Cleanup()
-    }
-
-    class ImGuiManager {
-        +Init(window, device, context)
-        +BeginFrame()
-        +EndFrame()
-        +Shutdown()
-    }
-
     class NetworkManager {
-        SOCKET clientSocket
-        thread receiveThread
-        mutex messagesMutex
-        ChatPacket[] pendingMessages
-        +Connect(address, port)
+        BoundedQueue outbound
+        BoundedQueue inbound
+        thread networkThread
+        +BeginConnect(address, port)
         +SendLoginRequest(user, password)
         +SendRegisterRequest(user, password)
-        +SendChatMessage(user, message)
-        +GetPendingMessages()
+        +SendChatMessage(message)
+        +GetPendingEvents()
     }
 
-    class Server {
-        SOCKET serverSocket
-        SOCKET[] connectedClients
-        Session[] sessions
-        +Init(port)
-        +Run()
-        +Shutdown()
-        -ClientLoop(socket)
-    }
-
-    class Session {
-        SOCKET socket
-        string username
-        +Send(message)
-        +Send(packet)
+    class ClientPacketReducer {
+        bool loggedIn
+        ClientChatMessage[] messages
+        +BeginLogin(user)
+        +Apply(packet)
         +Disconnect()
     }
 
-    class DatabaseManager {
-        <<singleton>>
-        SQLHENV hEnv
-        SQLHDBC hDbc
-        +Connect(connectionString)
+    class StreamingDecoder {
+        byte[] buffer
+        CodecError terminalError
+        +Push(data, size)
+    }
+
+    class Server {
+        <<pimpl>>
+        completion port
+        worker threads
+        session registry
+        DatabaseExecutor executor
+        +Init(address, port)
+        +Run()
+        +RequestStop()
+        +Shutdown()
+    }
+
+    class Session {
+        atomic socket
+        StreamingDecoder decoder
+        string authenticatedUsername
+        deque sendQueue
+        +Decode(bytes)
+        +TrySetAuthenticated(user)
+        +EnqueueSend(frame)
+        +CompleteSend(nextFrame)
+        +Close()
+    }
+
+    class DatabaseExecutor {
+        IChatService service
+        Job[] jobs
+        thread worker
+        +Start()
+        +TrySubmit(job)
+        +StopAccepting()
+        +Stop()
+    }
+
+    class IChatService {
+        <<interface>>
+        +Start()
         +RegisterUser(user, password)
-        +ValidateUser(user, password)
-        +SaveChatMessage(user, message)
-        +GetChatHistory(limit)
+        +Login(user, password, limit)
+        +StoreMessage(user, message)
+        +Stop()
     }
 
-    class ChatPacket {
-        PacketType type
-        string sender
-        string message
-        bool isMine
+    class DatabaseChatService {
+        DatabaseManager database
+        +RegisterUser(user, password)
+        +Login(user, password, limit)
+        +StoreMessage(user, message)
     }
 
-    Application *-- D3D11Manager
-    Application *-- ImGuiManager
+    class DatabaseManager {
+        <<pimpl>>
+        ODBC connection
+        +Connect(config)
+        +InsertUser(user, credential)
+        +LoadCredential(user)
+        +InsertMessage(user, message)
+        +LoadRecentHistory(limit)
+    }
+
+    class PasswordHasher {
+        +Hash(password, record)
+        +Verify(password, record)
+        +DummyVerify(password)
+    }
+
     Application *-- NetworkManager
-    NetworkManager --> ChatPacket
-    NetworkManager --> Server : TCP
-    Server --> DatabaseManager
-    Server o-- Session : declared but unused
-    Server --> ChatPacket
+    Application *-- ClientPacketReducer
+    NetworkManager *-- StreamingDecoder
+    Server o-- Session
+    Server *-- DatabaseExecutor
+    DatabaseExecutor --> IChatService
+    IChatService <|.. DatabaseChatService
+    DatabaseChatService *-- DatabaseManager
+    DatabaseChatService --> PasswordHasher
+    Session *-- StreamingDecoder
 ```
 
-`Application`은 세 객체를 값 멤버로 소유합니다. 초기화 순서는 Direct3D, ImGui, TCP 연결이며 종료는 TCP, ImGui, Direct3D 순서입니다. 네트워크 연결에 실패하면 메시지 상자를 띄운 뒤 초기화가 실패합니다.
+Client와 Server는 같은 `ChatProtocol` codec을 사용합니다. UI model은 protocol message를 직접 보관하지 않고 `ClientPacketReducer`에서 로그인 상태와 채팅 항목으로 축약합니다.
 
-서버는 `accept` 결과마다 `ClientLoop` 스레드를 분리합니다. `Session` 벡터도 멤버로 선언돼 있지만 실제로는 원시 `SOCKET`만 `connectedClients`에 넣고 `Session` 객체를 만들지 않습니다.
+## protocol frame
 
-## 스레드와 데이터 이동
+```mermaid
+packet-beta
+  0-15: "version"
+  16-31: "message type"
+  32-63: "request id"
+  64-95: "payload bytes"
+  96-159: "UTF-8 field payload"
+```
+
+header는 network byte order의 12바이트입니다. payload는 length-prefixed field 목록이며 전체 크기는 64 KiB 이하입니다. codec은 version, message type, UTF-8, field 개수와 길이를 모두 검증합니다.
+
+`StreamingDecoder`는 incomplete frame을 buffer에 남깁니다. 완성된 frame이 여러 개 있으면 한 번에 반환합니다. terminal protocol error가 생긴 decoder는 이후 입력도 같은 error로 거절해 손상된 stream을 계속 해석하지 않습니다.
+
+## client 경계
 
 ```mermaid
 sequenceDiagram
-    participant UI as Client UI thread
+    participant UI as ImGui UI thread
     participant NM as NetworkManager
-    participant RX as Client receive thread
-    participant SV as Server client thread
-    participant DB as DatabaseManager
-    participant PEER as Other clients
+    participant NW as Network worker
+    participant SV as Server
 
-    UI->>NM: send request
-    NM->>SV: TCP text packet
-    alt login or register
-        SV->>DB: validate or insert user
-        DB-->>SV: success or failure
-        SV-->>RX: response packet
-    else chat
-        SV->>DB: insert ChatLogs row
-        SV->>PEER: broadcast except sender
-    end
-    RX->>RX: lock and append pendingMessages
-    UI->>NM: GetPendingMessages
-    NM-->>UI: copy queue and clear under lock
-    UI->>UI: update ChatLog
+    UI->>NM: BeginConnect(address, port)
+    NM->>NW: start worker
+    NW->>SV: nonblocking connect
+    SV-->>NW: connected
+    NW->>NM: status event
+    UI->>NM: queue login or chat command
+    NM->>NW: wake event
+    NW->>SV: encoded frame
+    SV-->>NW: response frames
+    NW->>NM: bounded NetworkEvent queue
+    UI->>NM: GetPendingEvents
+    NM-->>UI: drained events
+    UI->>UI: ClientPacketReducer Apply
 ```
 
-클라이언트의 공유 경계는 비교적 분명합니다. 수신 스레드는 `pendingMessages`만 쓰고 UI 스레드는 `GetPendingMessages`로 복사한 뒤 화면 상태를 갱신합니다. 두 접근은 같은 mutex를 사용합니다.
+outbound command는 128개, inbound event는 256개로 제한됩니다. network worker는 UI thread를 막지 않고 stop event와 wake event로 종료와 새 command를 기다립니다.
 
-서버 쪽은 다릅니다. 여러 분리 스레드가 `connectedClients`를 추가, 순회, 삭제하지만 mutex가 없습니다. 하나의 `DatabaseManager` 연결도 모든 스레드가 공유합니다. 다중 클라이언트 부하를 받기 전에 소유권과 동기화 정책이 필요합니다.
+request ID는 login과 register 응답을 보낸 요청에 연결합니다. send queue는 partial send offset을 유지하고 frame 순서를 바꾸지 않습니다.
 
-## 패킷 형식
+## IOCP server
 
-전송 형식은 바이너리 구조체가 아니라 공백으로 구분한 문자열입니다.
+```mermaid
+sequenceDiagram
+    participant K as Windows IOCP
+    participant S as Server worker
+    participant SE as Session
+    participant DB as DatabaseExecutor
+    participant CS as IChatService
+    participant PEER as Authenticated sessions
 
-| 종류 | 값 | 전송 예시 | 서버 동작 |
-| --- | ---: | --- | --- |
-| LOGIN | 0 | `0 alice password` | 사용자와 비밀번호 조회 |
-| REGISTER | 1 | `1 alice password` | 사용자 행 삽입 |
-| CHAT | 2 | `2 alice hello world` | 채팅 저장 후 브로드캐스트 |
-| LOGIN_SUCCESS | 3 | `3` | 클라이언트 로그인 상태 변경 |
-| LOGIN_FAILED | 4 | `4` | 실패 팝업 표시 |
-| REGISTER_SUCCESS | 5 | `5` | 현재 클라이언트에서는 로그인 성공과 같은 문구 처리 |
-| REGISTER_FAILED | 6 | `6` | 실패 팝업 표시 |
+    S->>K: prepost AcceptEx
+    K-->>S: accept completion
+    S->>SE: create and register
+    S->>K: WSARecv
+    K-->>S: receive completion
+    S->>SE: streaming decode
+    loop decoded messages
+        S->>DB: TrySubmit job
+        DB->>CS: register, login or store
+        CS-->>DB: status and history
+        DB->>SE: queue encoded response
+        opt stored chat
+            DB->>PEER: ChatDelivered
+        end
+    end
+```
 
-`send` 호출 한 번과 `recv` 호출 한 번이 일대일로 대응한다는 보장은 TCP에 없습니다. 길이 접두사, 줄 구분자, 누적 버퍼 중 하나가 없어서 패킷이 나뉘거나 여러 개가 합쳐지면 파싱이 깨질 수 있습니다.
+Server는 기본 16개 AcceptEx를 유지합니다. accept된 socket은 completion port에 연결되고 `Session`이 receive pending, 인증 사용자와 send queue를 소유합니다.
 
-## 데이터 모델
+I/O operation은 생성과 retire 수를 diagnostic으로 셉니다. shutdown은 새 accept와 database 제출을 막고 session을 닫은 뒤 outstanding operation이 모두 빠져나올 때까지 기다립니다.
+
+## database 직렬화
+
+IOCP worker는 ODBC query를 직접 실행하지 않습니다. `DatabaseExecutor`의 단일 worker가 `IChatService` job을 순서대로 실행해 하나의 connection 소유권을 명확하게 유지합니다.
+
+database queue 기본 상한은 2,048개입니다. 가득 차면 해당 request를 실패시키고 diagnostic counter를 올립니다. network worker가 database 지연 때문에 block되지 않습니다.
+
+`IChatService` 덕분에 IOCP와 protocol test는 실제 MySQL 없이 memory service로 register, login, history와 chat 처리를 검증할 수 있습니다.
+
+## 인증과 메시지 처리
+
+```mermaid
+flowchart TD
+    A[Decoded message] --> B{type}
+    B -->|RegisterRequest| C[Validate username and password]
+    C --> D[PBKDF2 hash]
+    D --> E[Insert user]
+    B -->|LoginRequest| F[Load credential]
+    F --> G[PBKDF2 verify or dummy verify]
+    G --> H{valid?}
+    H -->|yes| I[Bind username to Session]
+    I --> J[Send LoginSucceeded]
+    J --> K[Send recent 50 messages]
+    B -->|ChatSend| L{authenticated and valid body?}
+    L -->|yes| M[Insert message]
+    M --> N[Broadcast ChatDelivered]
+```
+
+`Session`에 인증 사용자가 저장되므로 ChatSend frame은 username을 받지 않습니다. server가 socket과 연결된 identity를 사용해 발신자를 결정합니다.
+
+비밀번호를 찾지 못한 로그인도 PBKDF2 dummy verify를 수행합니다. 사용자 존재 여부에 따른 계산량 차이를 줄이기 위한 경계입니다.
+
+## 데이터 모델과 시간
 
 ```mermaid
 erDiagram
-    Users ||--o{ ChatLogs : writes
-    Users {
-        int UserID PK
-        nvarchar Username UK
-        nvarchar Password
-        datetime CreatedAt
+    users ||--o{ chat_messages : writes
+    users {
+        bigint id PK
+        varchar username UK
+        binary salt
+        binary hash
+        int iterations
+        timestamp created_at
     }
-    ChatLogs {
-        int LogID PK
-        int UserID FK
-        nvarchar Message
-        datetime SentAt
+    chat_messages {
+        bigint id PK
+        bigint user_id FK
+        text body
+        timestamp created_at
     }
 ```
 
-`DatabaseManager`는 ODBC 환경 핸들과 연결 핸들을 싱글턴으로 보유합니다. SQL 문은 파라미터 바인딩을 사용해 값 자체를 문자열로 이어 붙이지 않습니다. 다만 비밀번호 해시와 salt가 없고 연결 문자열도 코드에 고정돼 있습니다.
+MySQL은 timestamp를 UTC Unix millisecond로 변환해 protocol에 넣습니다. client의 `ChatTimeline`이 local calendar date와 `HH:mm`을 계산합니다. 날짜 separator와 message clock은 server 순서를 다시 정렬하지 않고 받은 timeline을 표현합니다.
 
-`GetChatHistory`는 사용자 이름과 메시지를 최근 순으로 조회하지만 이를 호출하는 서버 패킷은 없습니다. 스키마와 데이터 접근 함수까지만 있고 기능 흐름에는 연결되지 않은 상태입니다.
+## service lifecycle
 
-## 렌더링 경로
+`Start-ChatService.ps1`은 secret 생성, Compose 시작, health check, server process 시작과 실제 bind 확인을 순서대로 수행합니다. 성공한 endpoint와 PID를 `.run/server.json`에 기록합니다.
 
-```mermaid
-flowchart LR
-    A[Win32 message pump] --> B[D3D11Manager BeginFrame]
-    B --> C[Clear render target]
-    C --> D[ImGui new frame]
-    D --> E{LoggedIn}
-    E -->|no| F[Login and register UI]
-    E -->|yes| G[Chat room UI]
-    F --> H[ImGui render draw data]
-    G --> H
-    H --> I[Swap chain Present]
-```
+`Stop-ChatService.ps1`은 PID뿐 아니라 executable path를 확인합니다. named event로 정상 종료를 요청하고 process가 끝난 뒤 Compose를 내립니다. 데이터 volume은 유지합니다.
 
-`D3D11Manager`는 900 x 700 Win32 창에 맞춘 스왑 체인과 렌더 타깃을 만듭니다. `ImGuiManager`는 Win32 입력 백엔드와 Direct3D 11 렌더링 백엔드를 연결합니다. 실제 로그인과 채팅 화면은 `Application`이 구성합니다.
+Server 자체도 console control event와 선택적인 named stop event를 같은 `RequestStop` 경계로 모읍니다.
 
-## 개선 우선순위
+## UI와 렌더링
 
-1. 비밀번호를 해시하고 TLS 또는 별도 보안 채널을 적용합니다.
-2. 길이 접두사와 누적 수신 버퍼로 TCP 프레이밍을 만듭니다.
-3. 서버의 연결 레지스트리와 DB 접근을 동기화하거나 작업 큐로 직렬화합니다.
-4. 로그인 비밀번호 입력과 발신 메시지 로컬 반영을 완성합니다.
-5. 사용하지 않는 `Session`을 실제 연결 소유자로 통합하거나 제거합니다.
-6. DB가 없어도 프로토콜을 검증할 수 있는 테스트 대역과 자동화된 테스트를 추가합니다.
+`Application`은 login card와 full-window chat room을 상태에 따라 그립니다. chat 화면에는 접속 endpoint, 현재 사용자, 날짜 separator, 시간과 좌우 message bubble이 있습니다.
+
+password buffer는 request queue에 들어간 직후와 shutdown 때 `SecureZeroMemory`로 지웁니다. UI는 register 입력 길이와 공백을 server와 같은 규칙으로 먼저 검사하지만 server validation이 최종 기준입니다.
+
+## 검증 경계
+
+- codec test는 split, coalesced, malformed frame과 UTF-8을 검사합니다.
+- client network integration은 connect, partial send, queue, reconnect와 worker 종료를 검사합니다.
+- IOCP test는 preposted accept, session 수명, backpressure, database queue와 shutdown을 검사합니다.
+- persistence unit test는 service와 database mapping, password hash와 ODBC Unicode 변환을 검사합니다.
+- script contract test는 secret, bind, PID, package와 stop 정책을 검사합니다.
+- live E2E는 실제 MySQL과 server process에서 가입, 로그인, 양방향 chat, 재시작 뒤 history, offline reconnect를 검사합니다.
+
+단위 및 process-local 통합 테스트는 별도 LAN 장치와 실제 router 경계를 검증하지 않습니다.
