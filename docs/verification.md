@@ -3,7 +3,6 @@
 ## 기준
 
 - 기준 브랜치: `main`
-- 반영한 기준 커밋: `2ef01dd`
 - 운영체제: Windows
 - 빌드 도구: Visual Studio 2022 MSBuild 17.14
 - 구성: `Debug|x64`, `Release|x64`

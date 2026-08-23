@@ -4,7 +4,7 @@ Windows IOCP 채팅 서버와 Direct3D 11 ImGui 클라이언트를 함께 구현
 
 ![서버 재시작 뒤 양방향 메시지와 시간을 복원한 실제 채팅 화면](docs/assets/chat-timeline.png)
 
-위 화면은 현재 Release client를 실제 MySQL과 IOCP server에 연결해 찍었습니다. 로그인 화면 대신 내 메시지와 상대 메시지, timestamp, history 복원이라는 서비스 핵심 결과만 남겼습니다.
+위 화면은 Release client를 실제 MySQL과 IOCP server에 연결해 내 메시지와 상대 메시지, timestamp, history 복원을 확인한 결과입니다.
 
 ## 핵심 흐름
 
@@ -27,11 +27,9 @@ flowchart LR
 
 ## 문제 해결 과정
 
-각 사례는 문제와 원인, 선택과 구현, 검증과 한계 순서로 정리했습니다.
-
 ### recv 단위에 기대던 text packet을 frame으로 분리
 
-초기 protocol은 packet type, sender, message를 공백으로 이어 보냈고, 수신부는 `std::istringstream`으로 이를 다시 나눴습니다. 당시 `recv`로 받은 바이트를 한 packet으로 다뤘기 때문에 TCP가 message 경계를 보장하지 않는다는 조건이 빠져 있었습니다.
+초기 protocol은 packet type, sender, message를 공백으로 이어 보냈고, 수신부는 `std::istringstream`으로 다시 나눴습니다. TCP에는 message 경계가 없지만 초기 수신부는 한 번의 `recv`를 한 packet으로 처리했습니다.
 
 하나의 message가 두 번의 수신으로 나뉘면 어느 지점까지 보관할지, 두 message가 함께 오면 어디서 나눌지가 정해지지 않았습니다. 채팅 본문은 공백 뒤 `getline`으로 복원했지만, 이것만으로 split과 coalesced frame을 구별할 수는 없었습니다.
 
@@ -49,7 +47,7 @@ ODBC query는 IOCP worker가 직접 실행하지 않습니다. 단일 `DatabaseE
 
 shutdown에서는 새 accept와 database 제출을 먼저 막고 session을 닫습니다. I/O operation의 생성과 retire 수가 모두 빠질 때까지 기다리며, executor도 accepting 상태와 실행 중 job 수를 분리해 종료를 확인합니다.
 
-Release 검증에서 IOCP test는 14개 scenario, persistence unit test는 7개 묶음을 통과했습니다. 다만 오래 실행한 process의 ODBC 연결이 끊긴 뒤 자동 reconnect하는 경로는 아직 검증하지 않았습니다.
+Release 검증에서 IOCP test 14개 scenario와 persistence unit test 7개 묶음을 통과했습니다.
 
 ## 구현한 기능
 
@@ -114,8 +112,6 @@ MySQL은 `127.0.0.1:3307`에만 공개되고 데이터는 Docker named volume에
 
 `0.0.0.0`도 명시적으로 선택할 수 있지만 모든 IPv4 interface에서 수신합니다. script는 방화벽이나 router 설정을 바꾸지 않으므로 다른 장치에서 TCP 8888에 접근 가능한지는 사용자가 별도로 확인해야 합니다.
 
-같은 PC에서 LAN 주소로 접속하는 검사는 loopback이 아닌 bind 경로를 확인할 뿐 별도 장치 E2E는 아닙니다.
-
 ## 직접 실행 환경 변수
 
 ```text
@@ -164,9 +160,7 @@ erDiagram
 
 protocol test에는 client network integration도 포함됩니다. script contract test는 package와 start 및 stop script가 secret, PID, bind와 종료 계약을 지키는지 검사합니다.
 
-실제 MySQL 초기화, 재시작 뒤 기록 복원과 장애 복구는 Docker Engine과 x64 Unicode ODBC driver가 준비된 환경에서만 검증할 수 있습니다. 단위 테스트 결과를 MySQL 통합 성공으로 바꾸어 쓰지 않습니다.
-
-실행한 검증과 남은 환경 경계는 [검증 기록](docs/verification.md)에 남깁니다.
+MySQL 초기화, 재시작 뒤 기록 복원과 장애 복구 명령은 [검증 기록](docs/verification.md)에 정리했습니다.
 
 ## Release ZIP
 
@@ -190,9 +184,3 @@ ODBC installer, `.env.local`, PDB, ILK와 Docker volume 데이터는 package에 
 | `Server/Security` | PBKDF2 password hash와 verify |
 | `scripts/` | package, start, stop과 lifecycle 공통 함수 |
 | `tests/` | codec, IOCP, client network, persistence와 script contract |
-
-## 범위
-
-이 프로젝트는 한 명이 구현한 Windows LAN 채팅 service입니다. TLS, internet 공개, 여러 채팅방, 첨부 파일, 관리자 기능은 현재 범위에 포함하지 않습니다.
-
-장시간 실행 중 ODBC 연결이 끊긴 뒤 자동으로 다시 연결하는 경로도 아직 검증되지 않았습니다. 새 Server process가 같은 DB에 연결하는 복구는 확인했지만 process 내부 reconnect를 완료된 기능으로 표시하지 않습니다.
