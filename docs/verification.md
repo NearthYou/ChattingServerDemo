@@ -65,6 +65,8 @@ Server와 Client Release 빌드가 완료됐고 `dist\ChatService-x64-Release.zi
 
 이 검증은 같은 PC의 loopback service입니다. 별도 LAN 장치, Windows 방화벽과 router 경계는 확인하지 않았습니다.
 
+write와 read가 끝난 test 계정으로 현재 Release client에 로그인해 `docs/assets/chat-timeline.png`를 캡처했습니다. 화면에는 server에서 복원한 두 계정의 message, 작성 시간과 좌우 bubble이 함께 나타납니다. 로그인과 가입 화면은 대표 자료로 사용하지 않았습니다.
+
 ## 발견한 운영 경계
 
 검증 전에 이미 실행 중이던 `127.0.0.1:8888` Server는 TCP 연결은 받았지만 새 registration을 모두 실패시켰습니다. 같은 MySQL의 schema, 권한과 직접 query는 정상이었고 test username은 DB에 삽입되지 않았습니다.

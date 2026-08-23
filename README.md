@@ -2,6 +2,10 @@
 
 Windows IOCP 채팅 서버와 Direct3D 11 ImGui 클라이언트를 함께 구현한 개인 프로젝트입니다. 길이가 있는 binary frame, 비동기 socket 처리, MySQL 영속화와 채팅 timeline을 한 서비스 흐름으로 연결합니다.
 
+![서버 재시작 뒤 양방향 메시지와 시간을 복원한 실제 채팅 화면](docs/assets/chat-timeline.png)
+
+위 화면은 현재 Release client를 실제 MySQL과 IOCP server에 연결해 찍었습니다. 로그인 화면 대신 내 메시지와 상대 메시지, timestamp, history 복원이라는 서비스 핵심 결과만 남겼습니다.
+
 ## 핵심 흐름
 
 ```mermaid
