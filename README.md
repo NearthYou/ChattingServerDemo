@@ -25,6 +25,30 @@ flowchart LR
 
 클래스 소유 관계, packet 처리 순서와 shutdown 경계는 [아키텍처 문서](docs/architecture.md)에 정리했습니다.
 
+## 문제를 해결한 과정
+
+### recv 단위에 기대던 text packet을 frame으로 분리
+
+초기 protocol은 packet type, sender, message를 공백으로 이어 보냈고, 수신부는 `std::istringstream`으로 이를 다시 나눴습니다. 당시 `recv`로 받은 바이트를 한 packet으로 다뤘기 때문에 TCP가 message 경계를 보장하지 않는다는 조건이 빠져 있었습니다.
+
+하나의 message가 두 번의 수신으로 나뉘면 어느 지점까지 보관할지, 두 message가 함께 오면 어디서 나눌지가 정해지지 않았습니다. 채팅 본문은 공백 뒤 `getline`으로 복원했지만, 이것만으로 split과 coalesced frame을 구별할 수는 없었습니다.
+
+이를 version, type, request ID, payload length를 담은 12바이트 header와 length-prefixed field로 바꿨습니다. `StreamingDecoder`는 미완성 frame을 buffer에 남기고, 완성된 frame이 여러 개면 도착 순서대로 꺼냅니다.
+
+length가 64 KiB를 넘거나 version과 type이 맞지 않으면 decoder를 terminal error로 멈추게 했습니다. payload shape와 UTF-8도 함께 검사해 손상된 stream을 계속 해석하지 않습니다. protocol test는 byte 단위 split, coalesced frame, oversized length, malformed field와 invalid UTF-8을 확인합니다.
+
+### detached thread와 공유 DB를 실행 경계로 나누기
+
+초기 server는 접속마다 `std::thread`를 만들고 detach했으며, client loop가 singleton database manager와 연결 목록을 함께 사용했습니다. 이 구조에서는 종료할 때 남은 작업을 기다릴 기준과 한 connection을 누가 쓰는지가 분명하지 않았습니다.
+
+server는 completion port worker가 Accept, Receive, Send 완료를 회수하도록 바꿨습니다. `Session`은 receive를 하나만 pending으로 두고, send는 mutex로 보호한 queue와 in-flight frame으로 직렬화합니다. partial send 뒤에도 다음 frame이 앞서 나가지 않습니다.
+
+ODBC query는 IOCP worker가 직접 실행하지 않습니다. 단일 `DatabaseExecutor`가 하나의 service connection을 순서대로 사용하고, 기본 2,048개 queue가 차면 요청을 거절합니다. 느린 database가 network worker를 멈추거나 job을 무한히 쌓지 않게 한 선택입니다.
+
+shutdown에서는 새 accept와 database 제출을 먼저 막고 session을 닫습니다. I/O operation의 생성과 retire 수가 모두 빠질 때까지 기다리며, executor도 accepting 상태와 실행 중 job 수를 분리해 종료를 확인합니다.
+
+Release 검증에서 IOCP test는 14개 scenario, persistence unit test는 7개 묶음을 통과했습니다. 다만 오래 실행한 process의 ODBC 연결이 끊긴 뒤 자동 reconnect하는 경로는 아직 검증하지 않았습니다.
+
 ## 구현한 기능
 
 ### 길이가 있는 streaming protocol
