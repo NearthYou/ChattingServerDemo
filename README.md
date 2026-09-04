@@ -4,9 +4,9 @@ Windows 소켓과 IOCP를 공부하며 만든 실시간 채팅 서비스입니�
 
 `C++17` `Winsock2` `IOCP` `Direct3D 11` `Dear ImGui` `MySQL` `ODBC` `Docker Compose`
 
-![두 사용자가 실제 서버에서 대화하는 채팅 화면](docs/assets/chat-timeline.png)
+[![두 클라이언트의 대화와 서버 상태를 함께 실행한 화면](docs/assets/chat-service-demo.png)](docs/assets/chat-service-demo.mp4)
 
-서버를 Wi-Fi LAN 주소 `172.30.1.60:8888`에 열고 Release 클라이언트 두 개로 대화한 화면입니다. Docker 컨테이너에서도 같은 주소로 TCP 연결을 확인했습니다.
+두 클라이언트가 주고받은 메시지가 아래 서버를 거쳐 MySQL에 저장되는 과정을 한 화면에 담았습니다. [18초 시연 영상 보기](docs/assets/chat-service-demo.mp4)
 
 ## 주요 기능
 
@@ -46,6 +46,12 @@ flowchart LR
 
 네트워크 처리는 IOCP 작업 스레드가 맡고, DB 작업은 `DatabaseExecutor` 한 곳에서 처리하도록 나눴습니다. 각 `Session`은 보낼 메시지를 큐에 넣어 순서를 지키며, 전송 큐나 DB 작업 큐가 한도를 넘으면 해당 연결을 닫습니다.
 
+### 창을 줄였을 때 생긴 빈 여백 없애기
+
+두 클라이언트를 나란히 놓으려고 창 크기를 줄이자 오른쪽에 회색 여백이 생겼습니다. Win32 창만 줄어들고 Direct3D가 처음 만든 렌더 타깃은 그대로 남아 있었기 때문입니다.
+
+`WM_SIZE`에서 새 크기를 받아 두고 다음 프레임을 그리기 전에 DXGI 백 버퍼와 렌더 타깃을 다시 만들었습니다. 이제 창 크기를 바꿔도 채팅 화면이 가장자리까지 채워집니다.
+
 ## 숫자로 보는 동작 기준
 
 | 항목 | 기준 | 이유 |
@@ -83,6 +89,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 클라이언트 100개가 접속했을 때 메시지 전달과 서버 종료
 - 실제 MySQL 저장과 서버 재시작 뒤 대화 복원
 - Wi-Fi LAN 주소에서 Release 클라이언트 두 개의 채팅과 Docker 컨테이너의 TCP 접속
+- 창 크기를 바꾼 뒤에도 화면이 빈 여백 없이 다시 그려지는지 확인
 - Debug와 Release 빌드, 패키지 생성 스크립트
 
 실행 명령과 테스트 결과는 [검증 기록](docs/verification.md)에 정리했습니다.
