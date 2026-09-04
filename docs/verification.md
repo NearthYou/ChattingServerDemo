@@ -64,7 +64,9 @@ Server와 Client Release 빌드가 완료됐고 `dist\ChatService-x64-Release.zi
 
 이 검증은 같은 PC의 loopback service입니다. 별도 LAN 장치, Windows 방화벽과 router 경계는 확인하지 않았습니다.
 
-write와 read가 끝난 test 계정으로 현재 Release client에 로그인해 `docs/assets/chat-timeline.png`를 캡처했습니다. 화면에는 server에서 복원한 두 계정의 message, 작성 시간과 좌우 bubble이 함께 나타납니다. 로그인과 가입 화면은 대표 자료로 사용하지 않았습니다.
+2026년 9월 4일에는 서버를 Wi-Fi LAN 주소 `172.30.1.60:8888`에 열었습니다. Release 클라이언트 두 개로 `mina`와 `june`에 다시 로그인하자 서버 재시작 전에 저장한 대화가 복원됐습니다.
+
+두 클라이언트로 일상 대화 여섯 건을 더 주고받았고, Docker 컨테이너에서도 같은 LAN 주소로 TCP 연결을 확인했습니다. `docs/assets/chat-timeline.png`에는 LAN 주소, 전송 시각과 좌우 말풍선이 함께 보입니다.
 
 ## 발견한 운영 경계
 
