@@ -1,6 +1,6 @@
 # 아키텍처
 
-Chatting Server Demo는 GUI, client network worker, binary protocol, IOCP transport와 database service를 분리합니다. 각 경계는 bounded queue나 interface를 통해 연결해 느린 client와 database가 무제한 memory 증가로 이어지지 않게 합니다.
+채팅 화면, 소켓 통신, IOCP 서버와 DB 저장을 서로 분리했습니다. 화면 스레드는 렌더링만 맡고, 네트워크와 DB 대기는 각각 별도 스레드에서 처리합니다. 작업이 갑자기 몰려도 메모리가 계속 늘지 않도록 큐마다 최대 크기를 정했습니다.
 
 ## 클래스 관계
 
@@ -121,24 +121,24 @@ classDiagram
     Session *-- StreamingDecoder
 ```
 
-Client와 Server는 같은 `ChatProtocol` codec을 사용합니다. UI model은 protocol message를 직접 보관하지 않고 `ClientPacketReducer`에서 로그인 상태와 채팅 항목으로 축약합니다.
+클라이언트와 서버는 같은 `ChatProtocol` 코덱을 사용합니다. 화면은 패킷을 직접 보관하지 않고, `ClientPacketReducer`가 로그인 상태와 채팅 목록으로 바꾼 결과만 사용합니다.
 
-## protocol frame
+## 패킷 형식
 
 ```mermaid
 packet-beta
-  0-15: "version"
-  16-31: "message type"
-  32-63: "request id"
-  64-95: "payload bytes"
+  0-31: "payload bytes"
+  32-47: "version"
+  48-63: "message type"
+  64-95: "request id"
   96-159: "UTF-8 field payload"
 ```
 
-header는 network byte order의 12바이트입니다. payload는 length-prefixed field 목록이며 전체 크기는 64 KiB 이하입니다. codec은 version, message type, UTF-8, field 개수와 길이를 모두 검증합니다.
+헤더는 12바이트이며 버전, 메시지 종류, 요청 번호와 본문 길이를 담습니다. 본문은 길이를 앞에 붙인 필드 목록이고 전체 크기는 64 KiB 이하입니다. 코덱은 버전과 메시지 종류, UTF-8 형식, 필드 개수와 길이를 확인합니다.
 
-`StreamingDecoder`는 incomplete frame을 buffer에 남깁니다. 완성된 frame이 여러 개 있으면 한 번에 반환합니다. terminal protocol error가 생긴 decoder는 이후 입력도 같은 error로 거절해 손상된 stream을 계속 해석하지 않습니다.
+`StreamingDecoder`는 아직 다 받지 못한 패킷을 버퍼에 남겨 다음 수신 데이터와 이어 붙입니다. 패킷 여러 개가 한 번에 들어오면 길이만큼 차례로 꺼냅니다. 잘못된 패킷을 발견하면 연결을 닫아 손상된 데이터를 계속 해석하지 않습니다.
 
-## client 경계
+## 클라이언트 통신
 
 ```mermaid
 sequenceDiagram
@@ -162,9 +162,9 @@ sequenceDiagram
     UI->>UI: ClientPacketReducer Apply
 ```
 
-outbound command는 128개, inbound event는 256개로 제한됩니다. network worker는 UI thread를 막지 않고 stop event와 wake event로 종료와 새 command를 기다립니다.
+보낼 명령은 128개, 화면으로 전달할 이벤트는 256개까지 쌓을 수 있습니다. `NetworkManager`의 작업 스레드가 소켓을 기다리므로 화면은 멈추지 않습니다.
 
-request ID는 login과 register 응답을 보낸 요청에 연결합니다. send queue는 partial send offset을 유지하고 frame 순서를 바꾸지 않습니다.
+요청 번호는 자신이 보낸 채팅을 구분해 말풍선 위치를 정할 때 사용합니다. 한 패킷이 나눠 전송되더라도 보낸 위치를 기억하고 다음 패킷과 순서가 바뀌지 않게 처리합니다.
 
 ## IOCP server
 
@@ -194,17 +194,17 @@ sequenceDiagram
     end
 ```
 
-Server는 기본 16개 AcceptEx를 유지합니다. accept된 socket은 completion port에 연결되고 `Session`이 receive pending, 인증 사용자와 send queue를 소유합니다.
+서버는 `AcceptEx` 요청 16개를 미리 걸어 둡니다. 연결된 소켓은 completion port에 등록하고, 각 `Session`이 수신 상태와 로그인 사용자, 전송 큐를 관리합니다.
 
-I/O operation은 생성과 retire 수를 diagnostic으로 셉니다. shutdown은 새 accept와 database 제출을 막고 session을 닫은 뒤 outstanding operation이 모두 빠져나올 때까지 기다립니다.
+서버를 종료할 때는 새 연결과 DB 작업부터 막습니다. 그다음 세션을 닫고 이미 시작한 I/O가 모두 끝난 뒤 작업 스레드를 정리합니다.
 
-## database 직렬화
+## DB 작업
 
-IOCP worker는 ODBC query를 직접 실행하지 않습니다. `DatabaseExecutor`의 단일 worker가 `IChatService` job을 순서대로 실행해 하나의 connection 소유권을 명확하게 유지합니다.
+IOCP 작업 스레드는 ODBC 쿼리를 직접 실행하지 않습니다. `DatabaseExecutor`의 단일 작업 스레드가 가입, 로그인과 메시지 저장을 순서대로 처리합니다. 덕분에 하나의 DB 연결을 여러 스레드가 동시에 건드리지 않습니다.
 
-database queue 기본 상한은 2,048개입니다. 가득 차면 해당 request를 실패시키고 diagnostic counter를 올립니다. network worker가 database 지연 때문에 block되지 않습니다.
+DB 작업 큐는 최대 2,048개입니다. 큐가 가득 차면 해당 연결을 닫아 더 많은 작업이 쌓이지 않게 합니다. DB가 느려져도 IOCP 작업 스레드는 다른 소켓 처리를 이어 갑니다.
 
-`IChatService` 덕분에 IOCP와 protocol test는 실제 MySQL 없이 memory service로 register, login, history와 chat 처리를 검증할 수 있습니다.
+서버는 `IChatService`만 바라봅니다. 테스트에서는 MySQL 대신 메모리 구현을 넣어 가입, 로그인, 이전 대화와 채팅 전달을 빠르게 확인합니다.
 
 ## 인증과 메시지 처리
 
@@ -225,9 +225,9 @@ flowchart TD
     M --> N[Broadcast ChatDelivered]
 ```
 
-`Session`에 인증 사용자가 저장되므로 ChatSend frame은 username을 받지 않습니다. server가 socket과 연결된 identity를 사용해 발신자를 결정합니다.
+로그인한 사용자는 `Session`에 저장합니다. 채팅 패킷에는 닉네임을 받지 않고, 서버가 소켓에 연결된 사용자를 발신자로 정합니다.
 
-비밀번호를 찾지 못한 로그인도 PBKDF2 dummy verify를 수행합니다. 사용자 존재 여부에 따른 계산량 차이를 줄이기 위한 경계입니다.
+없는 닉네임으로 로그인해도 PBKDF2 검증을 한 번 수행합니다. 닉네임이 있는 경우와 없는 경우의 처리 시간 차이를 줄이기 위해서입니다.
 
 ## 데이터 모델과 시간
 
@@ -250,29 +250,29 @@ erDiagram
     }
 ```
 
-MySQL은 timestamp를 UTC Unix millisecond로 변환해 protocol에 넣습니다. client의 `ChatTimeline`이 local calendar date와 `HH:mm`을 계산합니다. 날짜 separator와 message clock은 server 순서를 다시 정렬하지 않고 받은 timeline을 표현합니다.
+MySQL의 저장 시각은 UTC Unix millisecond로 패킷에 넣습니다. 클라이언트의 `ChatTimeline`이 이를 현재 지역의 날짜와 `HH:mm`으로 바꿉니다. 서버가 보낸 순서는 그대로 유지합니다.
 
-## service lifecycle
+## 서비스 실행과 종료
 
-`Start-ChatService.ps1`은 secret 생성, Compose 시작, health check, server process 시작과 실제 bind 확인을 순서대로 수행합니다. 성공한 endpoint와 PID를 `.run/server.json`에 기록합니다.
+`Start-ChatService.ps1`은 로컬 비밀번호 생성, Compose 시작, MySQL 상태 확인과 서버 실행을 순서대로 진행합니다. 서버가 시작 직후 종료되지 않았는지 확인하고 주소와 PID를 `.run/server.json`에 기록합니다.
 
-`Stop-ChatService.ps1`은 PID뿐 아니라 executable path를 확인합니다. named event로 정상 종료를 요청하고 process가 끝난 뒤 Compose를 내립니다. 데이터 volume은 유지합니다.
+`Stop-ChatService.ps1`은 PID와 실행 파일 경로를 함께 확인한 뒤 종료 신호를 보냅니다. 서버가 끝나면 Compose를 내리되 MySQL 데이터 볼륨은 남깁니다.
 
-Server 자체도 console control event와 선택적인 named stop event를 같은 `RequestStop` 경계로 모읍니다.
+콘솔 종료 신호와 스크립트의 종료 신호는 모두 `RequestStop`으로 모입니다.
 
 ## UI와 렌더링
 
-`Application`은 login card와 full-window chat room을 상태에 따라 그립니다. chat 화면에는 접속 endpoint, 현재 사용자, 날짜 separator, 시간과 좌우 message bubble이 있습니다.
+`Application`은 로그인 전에는 작은 로그인 카드를, 로그인 후에는 전체 채팅 화면을 그립니다. 채팅 화면에는 접속 주소, 현재 사용자, 날짜, 시간과 좌우 말풍선이 표시됩니다.
 
-password buffer는 request queue에 들어간 직후와 shutdown 때 `SecureZeroMemory`로 지웁니다. UI는 register 입력 길이와 공백을 server와 같은 규칙으로 먼저 검사하지만 server validation이 최종 기준입니다.
+비밀번호 버퍼는 요청을 큐에 넣은 직후와 종료할 때 `SecureZeroMemory`로 지웁니다. 회원가입 입력은 화면에서 먼저 검사하고 서버에서 다시 확인합니다.
 
-## 검증 경계
+창 크기가 바뀌면 `WM_SIZE`에서 새 너비와 높이를 저장합니다. 다음 프레임을 시작하기 전에 `D3D11Manager`가 DXGI 백 버퍼와 렌더 타깃을 다시 만들어 빈 여백 없이 화면을 채웁니다.
 
-- codec test는 split, coalesced, malformed frame과 UTF-8을 검사합니다.
-- client network integration은 connect, partial send, queue, reconnect와 worker 종료를 검사합니다.
-- IOCP test는 preposted accept, session 수명, backpressure, database queue와 shutdown을 검사합니다.
-- persistence unit test는 service와 database mapping, password hash와 ODBC Unicode 변환을 검사합니다.
-- script contract test는 secret, bind, PID, package와 stop 정책을 검사합니다.
-- live E2E는 실제 MySQL과 server process에서 가입, 로그인, 양방향 chat, 재시작 뒤 history, offline reconnect를 검사합니다.
+## 확인한 항목
 
-단위 및 process-local 통합 테스트는 별도 LAN 장치와 실제 router 경계를 검증하지 않습니다.
+- 코덱 테스트: 분할 수신, 여러 패킷 동시 수신, 잘못된 패킷과 UTF-8
+- 클라이언트 통합 테스트: 연결, 분할 전송, 큐, 재접속과 작업 스레드 종료
+- IOCP 테스트: 미리 건 AcceptEx, 세션 수명, 큐 한도와 서버 종료
+- 저장 테스트: 계정, 비밀번호 해시, 메시지와 이전 대화
+- 스크립트 테스트: 로컬 비밀번호, 주소, PID, 패키지와 종료 순서
+- 실제 실행: MySQL 가입과 로그인, 양방향 채팅, 재시작 뒤 대화 복원

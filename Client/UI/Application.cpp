@@ -59,7 +59,10 @@ ChatFonts LoadChatFonts()
         fonts.Body = AddFontFromFileIfPresent(io,
             "C:\\Windows\\Fonts\\gulim.ttc", 17.0f, &config, koreanRanges);
     fonts.Label = AddFontFromFileIfPresent(io,
-        "C:\\Windows\\Fonts\\seguisb.ttf", 15.0f, &config);
+        "C:\\Windows\\Fonts\\malgunbd.ttf", 15.0f, &config, koreanRanges);
+    if (!fonts.Label)
+        fonts.Label = AddFontFromFileIfPresent(io,
+            "C:\\Windows\\Fonts\\seguisb.ttf", 15.0f, &config);
     fonts.Heading = AddFontFromFileIfPresent(io,
         "C:\\Windows\\Fonts\\malgunbd.ttf", 27.0f, &config, koreanRanges);
     fonts.Display = AddFontFromFileIfPresent(io,
@@ -157,26 +160,14 @@ bool SecondaryButton(const char* label, ImVec2 size)
     return pressed;
 }
 
-void DrawConnectionCard(const std::string& status, const std::string& ip, int port, bool connected, bool connecting)
+void DrawConnectionStatus(const std::string& ip, int port, bool connected, bool connecting)
 {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.095f, 0.11f, 0.16f, 1.0f));
-    ImGui::BeginChild("ConnectionCard", ImVec2(-1.0f, 92.0f), true, ImGuiWindowFlags_NoScrollbar);
-    const ImU32 indicatorColor = connected ? SuccessColor : (connecting ? IM_COL32(250, 184, 74, 255) : IM_COL32(248, 113, 113, 255));
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 indicator(ImGui::GetWindowPos().x + 19.0f, ImGui::GetWindowPos().y + 24.0f);
-    drawList->AddCircleFilled(indicator, 5.0f, indicatorColor, 20);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 17.0f);
-    ImGui::PushFont(gChatFonts.Label);
-    ImGui::TextUnformatted(connected ? "ONLINE" : (connecting ? "CONNECTING" : "OFFLINE"));
-    ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "  %s:%d", ip.c_str(), port);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 17.0f);
-    ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - 14.0f);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "%s", status.c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
+    const char* state = connected ? "연결됨" : (connecting ? "연결 중" : "연결 끊김");
+    const ImU32 color = connected
+        ? SuccessColor
+        : (connecting ? IM_COL32(250, 184, 74, 255) : IM_COL32(248, 113, 113, 255));
+    const std::string line = std::string(state) + "  " + ip + ":" + std::to_string(port);
+    CenteredText(line.c_str(), gChatFonts.Label, color);
 }
 
 void DrawDateSeparator(
@@ -292,7 +283,7 @@ bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
     RegisterClassEx(&wc);
 
     hWnd = CreateWindow(wc.lpszClassName, L"ImGui Chat Client (DX11)", WS_OVERLAPPEDWINDOW,
-        100, 100, 900, 700, NULL, NULL, wc.hInstance, NULL);
+        100, 100, 900, 700, NULL, NULL, wc.hInstance, this);
 
     if (!D3D.Init(hWnd))
         return false;
@@ -305,14 +296,7 @@ bool Application::Init(HINSTANCE hInstance, const std::string& ip, int port)
     gChatFonts = LoadChatFonts();
     ApplyChatStyle();
 
-    if (Network.BeginConnect(ServerIp, ServerPort))
-    {
-        ConnectionStatus = "Connecting to the server.";
-    }
-    else
-    {
-        ConnectionStatus = "Disconnected. Start the server and reconnect.";
-    }
+    Network.BeginConnect(ServerIp, ServerPort);
 
     return true;
 }
@@ -331,6 +315,14 @@ int Application::Run()
 
             if (msg.message == WM_QUIT)
                 Running = false;
+        }
+
+        if (PendingResizeWidth != 0 && PendingResizeHeight != 0)
+        {
+            if (!D3D.Resize(PendingResizeWidth, PendingResizeHeight))
+                return 1;
+            PendingResizeWidth = 0;
+            PendingResizeHeight = 0;
         }
 
         D3D.BeginFrame();
@@ -356,12 +348,11 @@ int Application::Run()
                     showLoginFailedPopup = true;
                     break;
                 case PACKET_TYPE_REGISTER_SUCCESS:
-                    registerResultMessage = "Registration succeeded.";
+                    registerResultMessage = "가입이 완료됐습니다.";
                     showRegisterResultPopup = true;
                     break;
                 case PACKET_TYPE_REGISTER_FAILED:
-                    registerResultMessage =
-                        "Registration failed. The nickname may already be in use, or the server rejected the request.";
+                    registerResultMessage = "가입에 실패했습니다. 다시 시도해 주세요.";
                     showRegisterResultPopup = true;
                     break;
                 case PACKET_TYPE_CHAT:
@@ -372,20 +363,11 @@ int Application::Run()
                     break;
                 }
             }
-            else if (event.status == NetworkStatus::Connecting)
-            {
-                ConnectionStatus = event.message;
-            }
-            else if (event.status == NetworkStatus::Connected)
-            {
-                ConnectionStatus = "Connected. Log in to reload recent history.";
-            }
             else if (event.status == NetworkStatus::ConnectFailed ||
                 event.status == NetworkStatus::Disconnected ||
                 event.status == NetworkStatus::ProtocolError)
             {
                 ClientState.Disconnect();
-                ConnectionStatus = event.message.empty() ? "Disconnected." : event.message;
             }
             else if (event.status == NetworkStatus::QueueFull)
             {
@@ -417,8 +399,11 @@ void Application::DrawLoginUI()
     const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings;
     const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    const bool connected = Network.IsConnected();
+    const bool connecting = Network.IsConnecting();
     const float cardWidth = (std::max)(1.0f, (std::min)(500.0f, displaySize.x - 32.0f));
-    const float cardHeight = (std::max)(1.0f, (std::min)(630.0f, displaySize.y - 28.0f));
+    const float desiredCardHeight = !connected && !connecting ? 470.0f : 420.0f;
+    const float cardHeight = (std::max)(1.0f, (std::min)(desiredCardHeight, displaySize.y - 28.0f));
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(cardWidth, cardHeight), ImGuiCond_Always);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(PanelColor));
@@ -426,40 +411,27 @@ void Application::DrawLoginUI()
     ImGui::Begin("Login", nullptr, windowFlags);
 
     CenteredText("RELAY", gChatFonts.Display, AccentColor);
-    CenteredText("A focused real-time chat client", gChatFonts.Body, MutedTextColor);
-    ImGui::Dummy(ImVec2(0.0f, 12.0f));
-    DrawConnectionCard(ConnectionStatus, ServerIp, ServerPort, Network.IsConnected(), Network.IsConnecting());
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    DrawConnectionStatus(ServerIp, ServerPort, connected, connecting);
 
-    if (!Network.IsConnected() && !Network.IsConnecting())
+    if (!connected && !connecting)
     {
-        if (SecondaryButton("Reconnect to server", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        if (SecondaryButton("다시 연결", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
         {
-            if (Network.BeginConnect(ServerIp, ServerPort))
-            {
-                ConnectionStatus = "Connecting to the server.";
-            }
-            else
-            {
-                ConnectionStatus = "Reconnect failed. Check the server and try again.";
-            }
+            Network.BeginConnect(ServerIp, ServerPort);
         }
     }
 
-    ImGui::Dummy(ImVec2(0.0f, 4.0f));
-    ImGui::PushFont(gChatFonts.Label);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "NICKNAME");
-    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0.0f, 18.0f));
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##LoginNickname", "Enter your nickname", Nickname, IM_ARRAYSIZE(Nickname));
-    ImGui::PushFont(gChatFonts.Label);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "PASSWORD");
-    ImGui::PopFont();
+    ImGui::InputTextWithHint("##LoginNickname", "닉네임", Nickname, IM_ARRAYSIZE(Nickname));
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##LoginPassword", "Enter your password", LoginPassword,
+    ImGui::InputTextWithHint("##LoginPassword", "비밀번호", LoginPassword,
         IM_ARRAYSIZE(LoginPassword), ImGuiInputTextFlags_Password);
 
-    ImGui::BeginDisabled(!Network.IsConnected());
-    if (PrimaryButton("Sign in", ImVec2(ImGui::GetContentRegionAvail().x, 48.0f)))
+    ImGui::BeginDisabled(!connected);
+    if (PrimaryButton("로그인", ImVec2(ImGui::GetContentRegionAvail().x, 48.0f)))
     {
         if (strlen(Nickname) > 0 && strlen(LoginPassword) > 0)
         {
@@ -475,7 +447,7 @@ void Application::DrawLoginUI()
             }
         }
     }
-    if (SecondaryButton("Create account", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
+    if (SecondaryButton("회원가입", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
     {
         showRegisterPopup = true;
         RegisterNickname[0] = 0;
@@ -483,40 +455,32 @@ void Application::DrawLoginUI()
         registerValidationMessage.clear();
     }
     ImGui::EndDisabled();
-    CenteredText("Password is cleared after the request is queued", gChatFonts.Label, MutedTextColor);
 
     if (showRegisterPopup)
     {
-        ImGui::OpenPopup("Register");
+        ImGui::OpenPopup("회원가입");
         showRegisterPopup = false;
     }
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(
-        chat::ui::ClampedOverlayExtent(430.0f, displaySize.x),
-        chat::ui::ClampedOverlayExtent(400.0f, displaySize.y)), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Register", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
+        chat::ui::ClampedOverlayExtent(400.0f, displaySize.x),
+        chat::ui::ClampedOverlayExtent(340.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("회원가입", NULL,
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::PushFont(gChatFonts.Heading);
-        ImGui::TextUnformatted("Create account");
-        ImGui::PopFont();
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Choose credentials for this chat server.");
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextWithHint("##RegisterNickname", "Nickname", RegisterNickname, IM_ARRAYSIZE(RegisterNickname));
+        ImGui::InputTextWithHint("##RegisterNickname", "닉네임", RegisterNickname, IM_ARRAYSIZE(RegisterNickname));
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextWithHint("##RegisterPassword", "Password", RegisterPassword,
+        ImGui::InputTextWithHint("##RegisterPassword", "비밀번호", RegisterPassword,
             IM_ARRAYSIZE(RegisterPassword), ImGuiInputTextFlags_Password);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(MutedTextColor));
-        ImGui::TextWrapped("Nickname: 3-20 bytes (Korean: 3-6 characters), no spaces");
-        ImGui::TextWrapped("Password: 8-128 bytes (Korean: 3+ characters)");
-        ImGui::PopStyleColor();
         if (!registerValidationMessage.empty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.45f, 0.45f, 1.0f));
             ImGui::TextWrapped("%s", registerValidationMessage.c_str());
             ImGui::PopStyleColor();
         }
-        if (PrimaryButton("Register", ImVec2(ImGui::GetContentRegionAvail().x, 46.0f)))
+        if (PrimaryButton("가입하기", ImVec2(ImGui::GetContentRegionAvail().x, 46.0f)))
         {
             const char* validationMessage = chat::ui::RegistrationValidationMessage(
                 RegisterNickname,
@@ -527,7 +491,7 @@ void Application::DrawLoginUI()
             }
             else if (!Network.SendRegisterRequest(RegisterNickname, RegisterPassword))
             {
-                registerValidationMessage = "The registration request could not be queued.";
+                registerValidationMessage = "서버에 요청을 보내지 못했습니다.";
                 SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             }
             else
@@ -537,7 +501,7 @@ void Application::DrawLoginUI()
                 ImGui::CloseCurrentPopup();
             }
         }
-        if (SecondaryButton("Cancel", ImVec2(ImGui::GetContentRegionAvail().x, 42.0f)))
+        if (SecondaryButton("취소", ImVec2(ImGui::GetContentRegionAvail().x, 42.0f)))
         {
             SecureZeroMemory(RegisterPassword, sizeof(RegisterPassword));
             registerValidationMessage.clear();
@@ -547,20 +511,17 @@ void Application::DrawLoginUI()
     }
 
     if (showLoginFailedPopup)
-        ImGui::OpenPopup("Login Failed");
+        ImGui::OpenPopup("로그인 실패");
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(
         chat::ui::ClampedOverlayExtent(390.0f, displaySize.x),
-        chat::ui::ClampedOverlayExtent(215.0f, displaySize.y)), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Login Failed", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
+        chat::ui::ClampedOverlayExtent(165.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("로그인 실패", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::PushFont(gChatFonts.Heading);
-        ImGui::TextUnformatted("Unable to sign in");
-        ImGui::PopFont();
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Check your credentials and try again.");
-        ImGui::Dummy(ImVec2(0.0f, 10.0f));
-        if (PrimaryButton("Try again", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f))) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "닉네임과 비밀번호를 확인해 주세요.");
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        if (PrimaryButton("확인", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f))) {
             ImGui::CloseCurrentPopup();
             showLoginFailedPopup = false;
         }
@@ -569,21 +530,18 @@ void Application::DrawLoginUI()
 
     if (showRegisterResultPopup)
     {
-        ImGui::OpenPopup("Register Result");
+        ImGui::OpenPopup("가입 결과");
         showRegisterResultPopup = false;
     }
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(
         chat::ui::ClampedOverlayExtent(390.0f, displaySize.x),
-        chat::ui::ClampedOverlayExtent(215.0f, displaySize.y)), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Register Result", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
+        chat::ui::ClampedOverlayExtent(165.0f, displaySize.y)), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("가입 결과", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
     {
-        ImGui::PushFont(gChatFonts.Heading);
-        ImGui::TextUnformatted("Registration");
-        ImGui::PopFont();
         ImGui::TextWrapped("%s", registerResultMessage.c_str());
-        ImGui::Dummy(ImVec2(0.0f, 10.0f));
-        if (PrimaryButton("Continue", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        if (PrimaryButton("확인", ImVec2(ImGui::GetContentRegionAvail().x, 44.0f)))
         {
             ImGui::CloseCurrentPopup();
         }
@@ -611,17 +569,17 @@ void Application::DrawChatUI()
     static bool ScrollToBottom = false;
 
     ImGui::PushFont(gChatFonts.Heading);
-    ImGui::TextUnformatted("General chat");
+    ImGui::TextUnformatted("전체 채팅");
     ImGui::PopFont();
     ImGui::SameLine();
     constexpr float logoutButtonWidth = 96.0f;
     ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - 28.0f - logoutButtonWidth));
-    if (SecondaryButton("Log out", ImVec2(logoutButtonWidth, 34.0f)))
+    if (SecondaryButton("로그아웃", ImVec2(logoutButtonWidth, 34.0f)))
     {
         LogOut();
     }
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "Connected as %s", Nickname);
-    const std::string endpoint = "ONLINE  " + ServerIp + ":" + std::to_string(ServerPort);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MutedTextColor), "%s로 접속", Nickname);
+    const std::string endpoint = ServerIp + ":" + std::to_string(ServerPort);
     ImGui::SameLine();
     const float statusWidth = ImGui::CalcTextSize(endpoint.c_str()).x + 24.0f;
     ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - 28.0f - statusWidth));
@@ -640,8 +598,7 @@ void Application::DrawChatUI()
     if (ClientState.ChatMessages().empty())
     {
         ImGui::Dummy(ImVec2(0.0f, 36.0f));
-        CenteredText("No messages yet", gChatFonts.Heading, MutedTextColor);
-        CenteredText("Start the conversation below.", gChatFonts.Body, MutedTextColor);
+        CenteredText("아직 대화가 없습니다.", gChatFonts.Heading, MutedTextColor);
     }
     int messageIndex = 0;
     bool hasPreviousDate = false;
@@ -681,7 +638,7 @@ void Application::DrawChatUI()
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::PushItemWidth(-108.0f);
-    if (ImGui::InputTextWithHint("##Input", "Write a message...", InputBuffer, IM_ARRAYSIZE(InputBuffer),
+    if (ImGui::InputTextWithHint("##Input", "메시지 입력", InputBuffer, IM_ARRAYSIZE(InputBuffer),
         ImGuiInputTextFlags_EnterReturnsTrue))
     {
         if (SubmitCurrentMessage())
@@ -692,7 +649,7 @@ void Application::DrawChatUI()
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
-    if (PrimaryButton("Send", ImVec2(96.0f, 42.0f)))
+    if (PrimaryButton("전송", ImVec2(96.0f, 42.0f)))
     {
         if (SubmitCurrentMessage())
         {
@@ -711,14 +668,7 @@ void Application::LogOut()
     InputBuffer[0] = '\0';
     Network.Disconnect();
     ClientState.Disconnect();
-    if (Network.BeginConnect(ServerIp, ServerPort))
-    {
-        ConnectionStatus = "Connecting to the server.";
-    }
-    else
-    {
-        ConnectionStatus = "Disconnected. Start the server and reconnect.";
-    }
+    Network.BeginConnect(ServerIp, ServerPort);
 }
 
 bool Application::SubmitCurrentMessage()
@@ -729,7 +679,7 @@ bool Application::SubmitCurrentMessage()
     }
     if (!Network.SendChatMessage(InputBuffer))
     {
-        AddChatMessage("System", "The message could not be queued.", false);
+        AddChatMessage("System", "메시지를 보내지 못했습니다.", false);
     }
     InputBuffer[0] = '\0';
     return true;
@@ -742,9 +692,23 @@ void Application::AddChatMessage(const std::string& sender, const std::string& m
 
 LRESULT WINAPI Application::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    Application* application = reinterpret_cast<Application*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE)
+    {
+        const auto* create = reinterpret_cast<CREATESTRUCT*>(lParam);
+        application = static_cast<Application*>(create->lpCreateParams);
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(application));
+    }
+
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
 
+    if (msg == WM_SIZE && wParam != SIZE_MINIMIZED && application)
+    {
+        application->PendingResizeWidth = LOWORD(lParam);
+        application->PendingResizeHeight = HIWORD(lParam);
+        return 0;
+    }
     if (msg == WM_DESTROY)
     {
         PostQuitMessage(0);

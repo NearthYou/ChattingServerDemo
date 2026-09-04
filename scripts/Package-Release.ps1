@@ -37,6 +37,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'docker-compose.yml') -Destination (Join-Path $stage 'docker-compose.yml')
     Copy-Item -LiteralPath (Join-Path $root '.env.example') -Destination (Join-Path $stage '.env.example')
     Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination (Join-Path $stage 'README.md')
+    Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination (Join-Path $stage 'docs') -Recurse
     if (Test-Path -LiteralPath $zip -PathType Leaf) { Remove-Item -LiteralPath $zip -Force }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
 } finally {

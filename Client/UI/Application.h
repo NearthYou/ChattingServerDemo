@@ -24,6 +24,8 @@ private:
 
 private:
     HWND hWnd = nullptr;
+    UINT PendingResizeWidth = 0;
+    UINT PendingResizeHeight = 0;
     bool Running = true;
     bool showLoginFailedPopup = false;
     bool showRegisterPopup = false;
@@ -34,7 +36,6 @@ private:
     std::string registerResultMessage;
     std::string ServerIp;
     int ServerPort = 0;
-    std::string ConnectionStatus;
 
     char Nickname[32] = {};
     char LoginPassword[129] = {};

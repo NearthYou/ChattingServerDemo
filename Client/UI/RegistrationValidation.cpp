@@ -26,30 +26,30 @@ namespace chat::ui
     {
         if (nickname.empty() || password.empty())
         {
-            return "Nickname and password are required.";
+            return "닉네임과 비밀번호를 입력해 주세요.";
         }
         if (!chat::protocol::IsValidUtf8(nickname) ||
             !chat::protocol::IsValidUtf8(password))
         {
-            return "Nickname or password contains invalid text.";
+            return "입력한 내용을 확인해 주세요.";
         }
 
         const std::size_t nicknameCharacters = Utf8CodePointCount(nickname);
         if (nickname.size() < 3 || nickname.size() > 20 ||
             nicknameCharacters < 3 || nicknameCharacters > 20)
         {
-            return "Nickname must be 3-20 bytes. Korean nicknames can be 3-6 characters.";
+            return "닉네임은 영문 3~20자, 한글 3~6자로 입력해 주세요.";
         }
         for (const unsigned char byte : nickname)
         {
             if (byte <= 0x20 || byte == 0x7f)
             {
-                return "Nickname cannot contain spaces or control characters.";
+                return "닉네임에 공백은 사용할 수 없습니다.";
             }
         }
         if (password.size() < 8 || password.size() > 128)
         {
-            return "Password must be 8-128 bytes. Three Korean characters meet the minimum.";
+            return "비밀번호는 영문 8자 또는 한글 3자 이상 입력해 주세요.";
         }
         return nullptr;
     }
