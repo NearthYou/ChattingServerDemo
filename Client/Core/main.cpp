@@ -27,9 +27,9 @@ int main()
         return 1;
     }
 
-    app.Run();
+    const int result = app.Run();
     app.Shutdown();
 
     Logger::GetInstance().Log("Client shutdown");
-    return 0;
+    return result;
 }

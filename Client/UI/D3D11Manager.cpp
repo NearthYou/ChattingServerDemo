@@ -26,8 +26,24 @@ bool D3D11Manager::Init(HWND hWnd)
     if (FAILED(res))
         return false;
 
-    CreateRenderTarget();
+    if (!CreateRenderTarget())
+    {
+        Cleanup();
+        return false;
+    }
     return true;
+}
+
+bool D3D11Manager::Resize(UINT width, UINT height)
+{
+    if (!SwapChain || width == 0 || height == 0)
+        return true;
+
+    DeviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+    CleanupRenderTarget();
+    if (FAILED(SwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0)))
+        return false;
+    return CreateRenderTarget();
 }
 
 void D3D11Manager::BeginFrame()
@@ -50,12 +66,15 @@ void D3D11Manager::Cleanup()
     if (Device) { Device->Release(); Device = nullptr; }
 }
 
-void D3D11Manager::CreateRenderTarget()
+bool D3D11Manager::CreateRenderTarget()
 {
     ID3D11Texture2D* pBackBuffer = nullptr;
-    SwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    Device->CreateRenderTargetView(pBackBuffer, NULL, &RenderTargetView);
+    if (FAILED(SwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer))) || !pBackBuffer)
+        return false;
+
+    const HRESULT result = Device->CreateRenderTargetView(pBackBuffer, NULL, &RenderTargetView);
     pBackBuffer->Release();
+    return SUCCEEDED(result);
 }
 
 void D3D11Manager::CleanupRenderTarget()

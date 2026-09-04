@@ -280,13 +280,13 @@ namespace
     void RegistrationRulesExplainFailures()
     {
         CHECK(std::string(chat::ui::RegistrationValidationMessage("", "")) ==
-            "Nickname and password are required.");
+            "닉네임과 비밀번호를 입력해 주세요.");
         CHECK(std::string(chat::ui::RegistrationValidationMessage("ab", "password")) ==
-            "Nickname must be 3-20 bytes. Korean nicknames can be 3-6 characters.");
+            "닉네임은 영문 3~20자, 한글 3~6자로 입력해 주세요.");
         CHECK(std::string(chat::ui::RegistrationValidationMessage("a b", "password")) ==
-            "Nickname cannot contain spaces or control characters.");
+            "닉네임에 공백은 사용할 수 없습니다.");
         CHECK(std::string(chat::ui::RegistrationValidationMessage("alice", "short")) ==
-            "Password must be 8-128 bytes. Three Korean characters meet the minimum.");
+            "비밀번호는 영문 8자 또는 한글 3자 이상 입력해 주세요.");
         CHECK(chat::ui::RegistrationValidationMessage("alice", "password") == nullptr);
     }
 

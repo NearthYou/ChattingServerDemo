@@ -5,6 +5,7 @@ class D3D11Manager
 {
 public:
     bool Init(HWND hWnd);
+    bool Resize(UINT width, UINT height);
     void BeginFrame();
     void EndFrame();
     void Cleanup();
@@ -13,7 +14,7 @@ public:
     ID3D11DeviceContext* GetDeviceContext() { return DeviceContext; }
 
 private:
-    void CreateRenderTarget();
+    bool CreateRenderTarget();
     void CleanupRenderTarget();
 
     IDXGISwapChain* SwapChain = nullptr;
